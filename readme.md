@@ -7,7 +7,7 @@ Full-stack application to manage multiple Minecraft Bedrock servers using itzg/d
 - ✅ Start/Stop/Restart containers
 - ✅ Server renaming
 - ✅ Real-time logs & monitoring
-- ✅ RCON console commands
+- ✅ Console commands
 - ✅ **Advanced File Manager**
   - Upload multiple files
   - Download files
@@ -190,4 +190,5 @@ The application includes password protection:
 - Session-based authentication
 - Mobile responsive design for all devices
 - Real-time updates without page refresh
+
 
