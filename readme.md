@@ -5,7 +5,7 @@ Full-stack application to manage multiple Minecraft Bedrock servers using itzg/d
 
 ## How it works
 
-The aplication will create a minecraft bedrock server using docker itzg/docker-minecraft-bedrock-server, assign port, persistent volume. The aplication then act as UI to manage this container.
+The aplication will deploy a minecraft bedrock server using docker itzg/docker-minecraft-bedrock-server, assign port, persistent volume. The aplication then act as UI to manage this container.
 
 ### Features
 - ✅ Multiple server management
@@ -191,6 +191,7 @@ The application includes password protection:
 - Real-time updates without page refresh
 
 ## [SUPPORT ME](https://sociabuzz.com/mughniy/donate)
+
 
 
 
