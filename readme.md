@@ -45,6 +45,7 @@ The aplication will deploy a minecraft bedrock server using docker itzg/docker-m
 ### Prerequisites
 - Docker installed
 - Node.js 18+
+- Tested only on linux server (Ubuntu & Debian)
 
 ---
 
@@ -191,6 +192,7 @@ The application includes password protection:
 - Real-time updates without page refresh
 
 ## [SUPPORT ME](https://sociabuzz.com/mughniy/donate)
+
 
 
 
