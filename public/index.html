@@ -1,0 +1,2304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bedrock Server Manager</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <style>
+        body { background: #111827; color: #f3f4f6; }
+        .tab-active { border-bottom: 2px solid #10b981; color: #10b981; }
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; }
+        .log-container { 
+            font-family: monospace; 
+            font-size: 11px; 
+            height: calc(100vh - 250px);
+            min-height: 150px;
+            max-height: 1000px;
+            overflow-y: auto;
+            background: #111;
+            padding: 6px;
+            border-radius: 4px;
+            white-space: pre-wrap;
+            word-break: break-word;
+            line-height: 1.3;
+        }
+        .modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); align-items: center; justify-content: center; z-index: 50; padding: 1rem; }
+        .modal.active { display: flex; }
+        .modal > div { max-width: 100%; max-height: 90vh; overflow-y: auto; }
+        .context-menu { display: none; position: absolute; background: #1f2937; border: 1px solid #374151; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); z-index: 100; }
+        .context-menu.active { display: block; }
+        .sidebar { transition: transform 0.3s ease; }
+        .spinner {
+            border: 2px solid #f3f4f6;
+            border-top: 2px solid #10b981;
+            border-radius: 50%;
+            width: 16px;
+            height: 16px;
+            animation: spin 1s linear infinite;
+        }
+        .loading-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+        .loading-overlay.hidden { display: none; }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        @media (max-width: 768px) {
+            .sidebar { 
+                position: fixed; 
+                left: 0; 
+                top: 0; 
+                bottom: 0; 
+                z-index: 40; 
+                width: 16rem !important;
+                transform: translateX(-100%);
+            }
+            .sidebar.sidebar-open { transform: translateX(0); }
+            .sidebar-overlay { 
+                display: none; 
+                position: fixed; 
+                inset: 0; 
+                background: rgba(0,0,0,0.5); 
+                z-index: 39; 
+            }
+            .sidebar-overlay.active { display: block; }
+            .mobile-menu-btn { display: block !important; }
+            .log-container { height: calc(100vh - 350px); }
+        }
+        
+        @media (min-width: 769px) {
+            .mobile-menu-btn { display: none !important; }
+            .sidebar-overlay { display: none !important; }
+            .sidebar { transform: translateX(0) !important; }
+        }
+    </style>
+</head>
+<body>
+    <!-- Login Form -->
+    <div id="loginForm" class="flex items-center justify-center min-h-screen bg-gray-900 px-4">
+        <div class="bg-gray-800 p-6 rounded-lg shadow-lg w-full max-w-sm">
+            <h1 class="text-lg md:text-xl font-bold mb-4 text-center">🔒 Server Manager Login</h1>
+            <div class="mb-3">
+                <input type="password" id="passwordInput" placeholder="Enter password" class="w-full px-3 py-2 text-sm bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500" onkeypress="if(event.key === 'Enter') checkLogin()">
+            </div>
+            <button id="loginButton" onclick="checkLogin()" class="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded-lg text-sm">
+                Login
+            </button>
+            <p id="loginError" class="text-red-500 text-xs mt-2 hidden">Incorrect password. Please try again.</p>
+        </div>
+    </div>
+
+    <div id="app" class="hidden"></div>
+    
+    <!-- Upload Modal -->
+    <div id="uploadModal" class="modal">
+        <div class="bg-gray-800 rounded-lg p-4 w-80">
+            <h3 class="text-lg font-semibold mb-3">📤 Upload File</h3>
+            <input type="file" id="uploadInput" multiple class="w-full px-3 py-1.5 text-sm bg-gray-900 border border-gray-700 rounded-lg mb-3">
+            <div class="flex gap-2">
+                <button onclick="uploadFiles()" class="flex-1 px-3 py-1.5 text-sm bg-green-600 hover:bg-green-700 rounded-lg">Upload</button>
+                <button onclick="closeModal('uploadModal')" class="flex-1 px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 rounded-lg">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Rename Modal -->
+    <div id="renameModal" class="modal">
+        <div class="bg-gray-800 rounded-lg p-4 w-80">
+            <h3 class="text-lg font-semibold mb-3">✏️ Rename</h3>
+            <input type="text" id="renameInput" placeholder="New name..." class="w-full px-3 py-1.5 text-sm bg-gray-900 border border-gray-700 rounded-lg mb-3">
+            <div class="flex gap-2">
+                <button onclick="confirmRename()" class="flex-1 px-3 py-1.5 text-sm bg-green-600 hover:bg-green-700 rounded-lg">Rename</button>
+                <button onclick="closeModal('renameModal')" class="flex-1 px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 rounded-lg">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit Modal -->
+    <div id="editModal" class="modal">
+        <div class="bg-gray-800 rounded-lg p-4 w-3/4 max-w-4xl">
+            <div class="flex items-center justify-between mb-3">
+                <h3 class="text-lg font-semibold">📝 Edit: <span id="editFileName"></span></h3>
+                <button onclick="closeModal('editModal')" class="text-gray-400 hover:text-white text-xl">✕</button>
+            </div>
+            <textarea id="editContent" rows="20" class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg font-mono text-xs mb-3"></textarea>
+            <div class="flex gap-2">
+                <button onclick="saveFileContent()" class="px-3 py-1.5 text-sm bg-green-600 hover:bg-green-700 rounded-lg">💾 Save</button>
+                <button onclick="closeModal('editModal')" class="px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 rounded-lg">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- New Folder Modal -->
+    <div id="newFolderModal" class="modal">
+        <div class="bg-gray-800 rounded-lg p-4 w-80">
+            <h3 class="text-lg font-semibold mb-3">📁 New Folder</h3>
+            <input type="text" id="folderNameInput" placeholder="Folder name..." class="w-full px-3 py-1.5 text-sm bg-gray-900 border border-gray-700 rounded-lg mb-3">
+            <div class="flex gap-2">
+                <button onclick="createFolder()" class="flex-1 px-3 py-1.5 text-sm bg-green-600 hover:bg-green-700 rounded-lg">Create</button>
+                <button onclick="closeModal('newFolderModal')" class="flex-1 px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 rounded-lg">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Addon Upload Modal -->
+    <div id="addonUploadModal" class="modal">
+        <div class="bg-gray-800 rounded-lg p-4 w-96">
+            <h3 class="text-lg font-semibold mb-3">📦 Upload Addon</h3>
+            <div class="mb-3">
+                <label class="block text-sm text-gray-400 mb-2">Select addon file (.mcaddon, .mcpack, .mcworld, .mctemplate)</label>
+                <input type="file" id="addonUploadInput" accept=".mcaddon,.mcpack,.mcworld,.mctemplate" class="w-full px-3 py-1.5 text-sm bg-gray-900 border border-gray-700 rounded-lg">
+            </div>
+            <div class="text-xs text-gray-500 mb-3">
+                <p class="mb-1">📝 Supported formats:</p>
+                <ul class="list-disc list-inside space-y-0.5">
+                    <li><strong>.mcaddon</strong> - Behavior/Resource packs</li>
+                    <li><strong>.mcpack</strong> - Resource packs</li>
+                    <li><strong>.mcworld</strong> - World files</li>
+                    <li><strong>.mctemplate</strong> - World templates</li>
+                </ul>
+            </div>
+            <div id="uploadProgress" class="hidden mb-3 flex items-center gap-2">
+                <div class="spinner"></div>
+                <span class="text-sm text-gray-400">Uploading...</span>
+            </div>
+            <div class="flex gap-2">
+                <button id="uploadAddonBtn" onclick="uploadAddon()" class="flex-1 px-3 py-1.5 text-sm bg-green-600 hover:bg-green-700 rounded-lg">Upload</button>
+                <button onclick="closeModal('addonUploadModal')" class="flex-1 px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 rounded-lg">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="loading-overlay hidden">
+        <div class="flex flex-col items-center gap-3">
+            <div class="spinner"></div>
+            <span class="text-white text-sm">Processing...</span>
+        </div>
+    </div>
+
+    <!-- Context Menu -->
+    <div id="contextMenu" class="context-menu">
+        <div class="py-0.5">
+            <button onclick="contextAction('download')" class="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-700">⬇️ Download</button>
+            <button onclick="contextAction('zip')" class="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-700">📦 Zip</button>
+            <button onclick="contextAction('unzip')" class="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-700">📤 Unzip</button>
+            <div class="border-t border-gray-700 my-0.5"></div>
+            <button onclick="contextAction('rename')" class="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-700">✏️ Rename</button>
+            <button onclick="contextAction('edit')" class="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-700">📝 Edit</button>
+            <button onclick="contextAction('delete')" class="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-700 text-red-400">🗑️ Delete</button>
+        </div>
+    </div>
+
+    <!-- Server Context Menu -->
+    <div id="serverContextMenu" class="context-menu">
+        <div class="py-0.5">
+            <button onclick="serverContextAction('rename')" class="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-700">✏️ Rename Server</button>
+            <div class="border-t border-gray-700 my-0.5"></div>
+            <button onclick="serverContextAction('delete')" class="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-700 text-red-400">🗑️ Delete Server</button>
+        </div>
+    </div>
+
+    <script>
+        // Helper function to format file sizes
+        function formatBytes(bytes, decimals = 2) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const dm = decimals < 0 ? 0 : decimals;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+        }
+
+        // Login configuration
+        let LOGIN_CONFIG = {
+            PASSWORD: '@%0890MugH',
+            MAX_ATTEMPTS: 5,
+            LOCKOUT_MINUTES: 5
+        };
+        
+        // Check if user is logged in
+        function checkAuth() {
+            return localStorage.getItem('isAuthenticated') === 'true';
+        }
+        
+        // Check if login is locked out
+        function isLoginLocked() {
+            const lastAttempt = localStorage.getItem('lastFailedAttempt');
+            if (!lastAttempt) return false;
+            
+            const lockoutTime = 1000 * 60 * LOGIN_CONFIG.LOCKOUT_MINUTES; // Convert minutes to milliseconds
+            const timeSinceLastAttempt = Date.now() - parseInt(lastAttempt, 10);
+            
+            return timeSinceLastAttempt < lockoutTime;
+        }
+        
+        // Get remaining lockout time in seconds
+        function getRemainingLockoutTime() {
+            const lastAttempt = localStorage.getItem('lastFailedAttempt');
+            if (!lastAttempt) return 0;
+            
+            const lockoutTime = 1000 * 60 * LOGIN_CONFIG.LOCKOUT_MINUTES;
+            const timeSinceLastAttempt = Date.now() - parseInt(lastAttempt, 10);
+            const remainingTime = Math.ceil((lockoutTime - timeSinceLastAttempt) / 1000);
+            
+            return remainingTime > 0 ? remainingTime : 0;
+        }
+        
+        // Update login button state based on lockout
+        function updateLoginButtonState() {
+            const loginButton = document.getElementById('loginButton');
+            const errorElement = document.getElementById('loginError');
+            
+            if (isLoginLocked()) {
+                const remainingTime = getRemainingLockoutTime();
+                loginButton.disabled = true;
+                loginButton.textContent = `Tunggu ${remainingTime} detik`;
+                
+                if (remainingTime > 0) {
+                    setTimeout(updateLoginButtonState, 1000);
+                } else {
+                    loginButton.disabled = false;
+                    loginButton.textContent = 'Login';
+                    errorElement.textContent = 'Silakan coba login kembali';
+                    errorElement.classList.remove('hidden');
+                    setTimeout(() => errorElement.classList.add('hidden'), 3000);
+                }
+            }
+        }
+        
+        // Handle login
+        function checkLogin() {
+            const passwordInput = document.getElementById('passwordInput');
+            const errorElement = document.getElementById('loginError');
+            const loginButton = document.getElementById('loginButton');
+            
+            if (isLoginLocked()) {
+                const remainingTime = getRemainingLockoutTime();
+                errorElement.textContent = `Too many failed attempts. Please wait ${remainingTime} seconds.`;
+                errorElement.classList.remove('hidden');
+                return;
+            }
+            
+            if (passwordInput.value === LOGIN_CONFIG.PASSWORD) {
+                // Login successful
+                localStorage.setItem('isAuthenticated', 'true');
+                localStorage.removeItem('loginAttempts');
+                localStorage.removeItem('lastFailedAttempt');
+                
+                document.getElementById('loginForm').classList.add('hidden');
+                document.getElementById('app').classList.remove('hidden');
+                fetchServers();
+            } else {
+                // Login failed
+                const attempts = parseInt(localStorage.getItem('loginAttempts') || '0') + 1;
+                localStorage.setItem('loginAttempts', attempts);
+                localStorage.setItem('lastFailedAttempt', Date.now());
+                
+                const remainingAttempts = LOGIN_CONFIG.MAX_ATTEMPTS - attempts;
+                errorElement.textContent = `Incorrect password. ${remainingAttempts} attempts remaining.`;
+                errorElement.classList.remove('hidden');
+                
+                if (attempts >= LOGIN_CONFIG.MAX_ATTEMPTS) {
+                    updateLoginButtonState();
+                }
+            }
+        }
+        
+        // Check authentication on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            if (checkAuth()) {
+                document.getElementById('loginForm').classList.add('hidden');
+                document.getElementById('app').classList.remove('hidden');
+                fetchServers();
+            } else {
+                updateLoginButtonState();
+            }
+            
+            // Add event listener for password input
+            document.getElementById('passwordInput').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    checkLogin();
+                }
+            });
+            
+            // Add click event to close sidebar when clicking outside
+            document.addEventListener('click', (e) => {
+                const sidebar = document.querySelector('.sidebar');
+                const mobileMenuBtn = document.querySelector('.mobile-menu-btn');
+                if (sidebar && !sidebar.contains(e.target) && e.target !== mobileMenuBtn && !mobileMenuBtn?.contains(e.target)) {
+                    sidebar.classList.remove('sidebar-open');
+                    document.querySelector('.sidebar-overlay')?.classList.remove('active');
+                }
+            });
+        });
+        
+        const API_BASE = '/api';
+        let state = {
+            servers: [],
+            selectedServer: null,
+            activeTab: 'dashboard',
+            activeAddonTab: 'behavior',
+            logs: [],
+            files: [],
+            backups: [],
+            config: {},
+            players: [],
+            consoleCommand: '',
+            currentPath: '/',
+            selectedFile: null,
+            contextMenuFile: null,
+            serverContextMenuId: null,
+            scrollPositions: {},
+            lastUpdate: 0,
+            updateInterval: 5000, // 5 seconds
+            addons: { behaviorPacks: [], resourcePacks: [] },
+            worlds: [],
+            forceFullRender: false
+        };
+
+        // Fetch functions
+        async function fetchServers() {
+            try {
+                const res = await fetch(`${API_BASE}/servers`);
+                state.servers = await res.json();
+                if (!state.selectedServer && state.servers.length > 0) {
+                    state.selectedServer = state.servers[0].id;
+                }
+                renderSidebar();
+                render();
+            } catch (err) {
+                console.error('Failed to fetch servers:', err);
+            }
+        }
+
+        // Store scroll positions before update
+        function storeScrollPositions() {
+            const logsContainer = document.querySelector('.log-container');
+            const mainContent = document.getElementById('mainContent');
+            state.scrollPositions = {
+                logs: logsContainer ? logsContainer.scrollTop : 0,
+                main: mainContent ? mainContent.scrollTop : 0
+            };
+        }
+
+        // Restore scroll positions after render
+        function restoreScrollPositions() {
+            if (!state.scrollPositions) return;
+
+            const { logs, main } = state.scrollPositions;
+            const logsContainer = document.querySelector('.log-container');
+            const mainContent = document.getElementById('mainContent');
+
+            if (logsContainer && logs !== undefined) {
+                logsContainer.scrollTop = logs;
+            }
+
+            if (mainContent && main !== undefined) {
+                mainContent.scrollTop = main;
+            }
+        }
+
+        async function fetchServerDetails() {
+            if (!state.selectedServer) return;
+
+            // Store current scroll positions before updating
+            storeScrollPositions();
+
+            try {
+                // Only fetch data relevant to the current active tab to minimize UI disruption
+                const fetchPromises = [];
+
+                // Always fetch logs for dashboard and console tabs
+                if (state.activeTab === 'dashboard' || state.activeTab === 'console') {
+                    fetchPromises.push(fetch(`${API_BASE}/servers/${state.selectedServer}/logs`).then(r => r.json()));
+                } else {
+                    fetchPromises.push(Promise.resolve(state.logs));
+                }
+
+                // Fetch files only for files tab
+                if (state.activeTab === 'files') {
+                    fetchPromises.push(fetch(`${API_BASE}/servers/${state.selectedServer}/files?path=${state.currentPath}`).then(r => r.json()));
+                } else {
+                    fetchPromises.push(Promise.resolve(state.files));
+                }
+
+                // Fetch backups only for backups tab
+                if (state.activeTab === 'backups') {
+                    fetchPromises.push(fetch(`${API_BASE}/servers/${state.selectedServer}/backups`).then(r => r.json()));
+                } else {
+                    fetchPromises.push(Promise.resolve(state.backups));
+                }
+
+                // Fetch config only for config tab
+                if (state.activeTab === 'config') {
+                    fetchPromises.push(fetch(`${API_BASE}/servers/${state.selectedServer}/config`).then(r => r.json()));
+                } else {
+                    fetchPromises.push(Promise.resolve(state.config));
+                }
+
+                // Always fetch players for dashboard and players tabs
+                if (state.activeTab === 'dashboard' || state.activeTab === 'players') {
+                    fetchPromises.push(fetch(`${API_BASE}/servers/${state.selectedServer}/players`).then(r => r.json()));
+                } else {
+                    fetchPromises.push(Promise.resolve(state.players));
+                }
+
+                // Fetch addons only for addons tab
+                if (state.activeTab === 'addons') {
+                    fetchPromises.push(fetch(`${API_BASE}/servers/${state.selectedServer}/addons`).then(r => r.json()));
+                } else {
+                    fetchPromises.push(Promise.resolve(state.addons));
+                }
+
+                // Fetch worlds only for addons tab (worlds are part of addons)
+                if (state.activeTab === 'addons') {
+                    fetchPromises.push(fetch(`${API_BASE}/servers/${state.selectedServer}/worlds`).then(r => r.json()));
+                } else {
+                    fetchPromises.push(Promise.resolve(state.worlds));
+                }
+
+                // Fetch config only for addons tab (to determine current world)
+                if (state.activeTab === 'addons') {
+                    fetchPromises.push(fetch(`${API_BASE}/servers/${state.selectedServer}/config`).then(r => r.json()));
+                } else {
+                    fetchPromises.push(Promise.resolve(state.config));
+                }
+
+                const [logs, files, backups, config, players, addons, worlds, addonConfig] = await Promise.all(fetchPromises);
+
+                // Check which data actually changed based on current tab
+                let dataChanged = false;
+
+                if (state.activeTab === 'dashboard' || state.activeTab === 'console') {
+                    if (JSON.stringify(state.logs) !== JSON.stringify(logs)) {
+                        state.logs = logs;
+                        dataChanged = true;
+                    }
+                }
+
+                if (state.activeTab === 'files') {
+                    if (JSON.stringify(state.files) !== JSON.stringify(files)) {
+                        state.files = files;
+                        dataChanged = true;
+                    }
+                }
+
+                if (state.activeTab === 'backups') {
+                    if (JSON.stringify(state.backups) !== JSON.stringify(backups)) {
+                        state.backups = backups;
+                        dataChanged = true;
+                    }
+                }
+
+                if (state.activeTab === 'config') {
+                    if (JSON.stringify(state.config) !== JSON.stringify(config)) {
+                        state.config = config;
+                        dataChanged = true;
+                    }
+                }
+
+                if (state.activeTab === 'dashboard' || state.activeTab === 'players') {
+                    if (JSON.stringify(state.players) !== JSON.stringify(players)) {
+                        state.players = players;
+                        dataChanged = true;
+                    }
+                }
+
+                if (state.activeTab === 'addons') {
+                    if (JSON.stringify(state.addons) !== JSON.stringify(addons) ||
+                        JSON.stringify(state.worlds) !== JSON.stringify(worlds) ||
+                        JSON.stringify(state.config) !== JSON.stringify(addonConfig)) {
+                        state.addons = addons;
+                        state.worlds = worlds;
+                        state.config = addonConfig;
+                        dataChanged = true;
+                    }
+                }
+
+                // Only re-render if relevant data changed
+                if (dataChanged) {
+                    render();
+                    // Restore scroll positions after render is complete
+                    requestAnimationFrame(restoreScrollPositions);
+                }
+            } catch (err) {
+                console.error('Failed to fetch details:', err);
+            }
+        }
+
+        async function serverAction(action) {
+            try {
+                if (action === 'delete') {
+                    const server = state.servers.find(s => s.id === state.selectedServer);
+                    const serverName = server ? server.name : 'this server';
+                    const result = await Swal.fire({
+                        title: 'Delete Server',
+                        text: `Are you sure you want to delete "${serverName}"? This action cannot be undone.`,
+                        icon: 'warning',
+                        showCancelButton: true,
+                        confirmButtonColor: '#dc2626',
+                        cancelButtonColor: '#6b7280',
+                        confirmButtonText: 'Yes, delete it!'
+                    });
+                    if (!result.isConfirmed) return;
+                }
+                showLoading();
+                await fetch(`${API_BASE}/servers/${state.selectedServer}/${action}`, { method: 'POST' });
+                await fetchServers();
+                hideLoading();
+            } catch (err) {
+                hideLoading();
+                console.error(`Failed to ${action}:`, err);
+                Swal.fire({
+                    title: 'Error',
+                    text: `Failed to ${action} server: ${err.message}`,
+                    icon: 'error',
+                    confirmButtonColor: '#10b981'
+                });
+            }
+        }
+
+        async function createServer() {
+            const result = await Swal.fire({
+                title: 'Create New Server',
+                input: 'text',
+                inputLabel: 'Enter server name:',
+                inputPlaceholder: 'My Minecraft Server',
+                showCancelButton: true,
+                confirmButtonColor: '#10b981',
+                cancelButtonColor: '#6b7280',
+                inputValidator: (value) => {
+                    if (!value) {
+                        return 'Server name is required!';
+                    }
+                }
+            });
+            if (!result.isConfirmed || !result.value) return;
+            const name = result.value;
+            try {
+                showLoading();
+                await fetch(`${API_BASE}/servers`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name })
+                });
+                await fetchServers();
+                hideLoading();
+            } catch (err) {
+                hideLoading();
+                Swal.fire({
+                    title: 'Error',
+                    text: 'Failed to create server: ' + err.message,
+                    icon: 'error',
+                    confirmButtonColor: '#10b981'
+                });
+            }
+        }
+
+        async function executeCommand() {
+            if (!state.consoleCommand.trim()) return;
+            try {
+                showLoading();
+                const res = await fetch(`${API_BASE}/servers/${state.selectedServer}/command`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ command: state.consoleCommand })
+                });
+                const result = await res.json();
+                state.consoleCommand = '';
+                await fetchServerDetails();
+                hideLoading();
+                if (result.message) {
+                    console.log(result.message);
+                }
+            } catch (err) {
+                hideLoading();
+                Swal.fire({
+                    title: 'Error',
+                    text: 'Failed to execute command: ' + err.message,
+                    icon: 'error',
+                    confirmButtonColor: '#10b981'
+                });
+            }
+        }
+
+        async function kickPlayer(playerName) {
+            const result = await Swal.fire({
+                title: `Kick ${playerName}`,
+                input: 'text',
+                inputLabel: 'Enter reason (optional):',
+                inputPlaceholder: 'Reason for kicking...',
+                showCancelButton: true,
+                confirmButtonColor: '#f59e0b',
+                cancelButtonColor: '#6b7280',
+                confirmButtonText: 'Kick Player'
+            });
+            if (result.isDismissed) return;
+            const reason = result.value || '';
+            try {
+                showLoading();
+                await fetch(`${API_BASE}/servers/${state.selectedServer}/players/${encodeURIComponent(playerName)}/kick`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ reason })
+                });
+                await fetchServerDetails();
+                hideLoading();
+                Swal.fire({
+                    title: 'Success',
+                    text: `${playerName} has been kicked`,
+                    icon: 'success',
+                    confirmButtonColor: '#10b981',
+                    timer: 2000,
+                    timerProgressBar: true
+                });
+            } catch (err) {
+                hideLoading();
+                Swal.fire({
+                    title: 'Error',
+                    text: 'Failed to kick player: ' + err.message,
+                    icon: 'error',
+                    confirmButtonColor: '#10b981'
+                });
+            }
+        }
+
+        async function banPlayer(playerName) {
+            const result = await Swal.fire({
+                title: `Ban ${playerName}`,
+                input: 'text',
+                inputLabel: 'Enter reason (optional):',
+                inputPlaceholder: 'Reason for banning...',
+                showCancelButton: true,
+                confirmButtonColor: '#dc2626',
+                cancelButtonColor: '#6b7280',
+                confirmButtonText: 'Ban Player'
+            });
+            if (result.isDismissed) return;
+            const reason = result.value || '';
+            try {
+                showLoading();
+                await fetch(`${API_BASE}/servers/${state.selectedServer}/players/${encodeURIComponent(playerName)}/ban`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ reason })
+                });
+                await fetchServerDetails();
+                hideLoading();
+                Swal.fire({
+                    title: 'Success',
+                    text: `${playerName} has been banned`,
+                    icon: 'success',
+                    confirmButtonColor: '#10b981',
+                    timer: 2000,
+                    timerProgressBar: true
+                });
+            } catch (err) {
+                hideLoading();
+                Swal.fire({
+                    title: 'Error',
+                    text: 'Failed to ban player: ' + err.message,
+                    icon: 'error',
+                    confirmButtonColor: '#10b981'
+                });
+            }
+        }
+
+        async function opPlayer(playerName) {
+            const result = await Swal.fire({
+                title: 'Make Operator',
+                text: `Make ${playerName} an operator?`,
+                icon: 'question',
+                showCancelButton: true,
+                confirmButtonColor: '#3b82f6',
+                cancelButtonColor: '#6b7280',
+                confirmButtonText: 'Yes, make operator'
+            });
+            if (!result.isConfirmed) return;
+            try {
+                showLoading();
+                await fetch(`${API_BASE}/servers/${state.selectedServer}/players/${encodeURIComponent(playerName)}/op`, {
+                    method: 'POST'
+                });
+                await fetchServerDetails();
+                hideLoading();
+                Swal.fire({
+                    title: 'Success',
+                    text: `${playerName} is now an operator`,
+                    icon: 'success',
+                    confirmButtonColor: '#10b981',
+                    timer: 2000,
+                    timerProgressBar: true
+                });
+            } catch (err) {
+                hideLoading();
+                Swal.fire({
+                    title: 'Error',
+                    text: 'Failed to op player: ' + err.message,
+                    icon: 'error',
+                    confirmButtonColor: '#10b981'
+                });
+            }
+        }
+
+        async function deopPlayer(playerName) {
+            const result = await Swal.fire({
+                title: 'Remove Operator',
+                text: `Remove operator status from ${playerName}?`,
+                icon: 'question',
+                showCancelButton: true,
+                confirmButtonColor: '#6b7280',
+                cancelButtonColor: '#6b7280',
+                confirmButtonText: 'Yes, remove operator'
+            });
+            if (!result.isConfirmed) return;
+            try {
+                showLoading();
+                await fetch(`${API_BASE}/servers/${state.selectedServer}/players/${encodeURIComponent(playerName)}/deop`, {
+                    method: 'POST'
+                });
+                await fetchServerDetails();
+                hideLoading();
+                Swal.fire({
+                    title: 'Success',
+                    text: `${playerName} is no longer an operator`,
+                    icon: 'success',
+                    confirmButtonColor: '#10b981',
+                    timer: 2000,
+                    timerProgressBar: true
+                });
+            } catch (err) {
+                hideLoading();
+                Swal.fire({
+                    title: 'Error',
+                    text: 'Failed to deop player: ' + err.message,
+                    icon: 'error',
+                    confirmButtonColor: '#10b981'
+                });
+            }
+        }
+
+        async function createBackup() {
+            const result = await Swal.fire({
+                title: 'Create Backup',
+                text: 'Create backup now?',
+                icon: 'question',
+                showCancelButton: true,
+                confirmButtonColor: '#10b981',
+                cancelButtonColor: '#6b7280',
+                confirmButtonText: 'Yes, create backup'
+            });
+            if (!result.isConfirmed) return;
+            try {
+                showLoading();
+                await fetch(`${API_BASE}/servers/${state.selectedServer}/backups`, { method: 'POST' });
+                await fetchServerDetails();
+                hideLoading();
+                Swal.fire({
+                    title: 'Success',
+                    text: 'Backup created successfully!',
+                    icon: 'success',
+                    confirmButtonColor: '#10b981',
+                    timer: 2000,
+                    timerProgressBar: true
+                });
+            } catch (err) {
+                hideLoading();
+                Swal.fire({
+                    title: 'Error',
+                    text: 'Failed to create backup: ' + err.message,
+                    icon: 'error',
+                    confirmButtonColor: '#10b981'
+                });
+            }
+        }
+
+        async function restoreBackup(backupId) {
+            const result = await Swal.fire({
+                title: 'Restore Backup',
+                text: 'Restore this backup? Server will restart.',
+                icon: 'warning',
+                showCancelButton: true,
+                confirmButtonColor: '#f59e0b',
+                cancelButtonColor: '#6b7280',
+                confirmButtonText: 'Yes, restore backup'
+            });
+            if (!result.isConfirmed) return;
+            try {
+                showLoading();
+                await fetch(`${API_BASE}/servers/${state.selectedServer}/backups/${backupId}/restore`, { method: 'POST' });
+                hideLoading();
+                Swal.fire({
+                    title: 'Success',
+                    text: 'Backup restored successfully!',
+                    icon: 'success',
+                    confirmButtonColor: '#10b981',
+                    timer: 2000,
+                    timerProgressBar: true
+                });
+            } catch (err) {
+                hideLoading();
+                Swal.fire({
+                    title: 'Error',
+                    text: 'Failed to restore: ' + err.message,
+                    icon: 'error',
+                    confirmButtonColor: '#10b981'
+                });
+            }
+        }
+
+        async function saveConfig() {
+            try {
+                showLoading();
+                await fetch(`${API_BASE}/servers/${state.selectedServer}/config`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(state.config)
+                });
+                hideLoading();
+                Swal.fire({
+                    title: 'Success',
+                    text: 'Configuration saved!',
+                    icon: 'success',
+                    confirmButtonColor: '#10b981',
+                    timer: 2000,
+                    timerProgressBar: true
+                });
+            } catch (err) {
+                hideLoading();
+                Swal.fire({
+                    title: 'Error',
+                    text: 'Failed to save: ' + err.message,
+                    icon: 'error',
+                    confirmButtonColor: '#10b981'
+                });
+            }
+        }
+
+        // File Management Functions
+        function navigateFolder(path) {
+            state.currentPath = path;
+            fetchServerDetails();
+        }
+
+        function goUpDirectory() {
+            const parts = state.currentPath.split('/').filter(p => p);
+            parts.pop();
+            state.currentPath = '/' + parts.join('/');
+            fetchServerDetails();
+        }
+
+        function downloadFile(path) {
+            window.open(`${API_BASE}/servers/${state.selectedServer}/files/download?path=${path}`, '_blank');
+        }
+
+        async function deleteFile(path) {
+            const result = await Swal.fire({
+                title: 'Delete File',
+                text: 'Delete this file?',
+                icon: 'warning',
+                showCancelButton: true,
+                confirmButtonColor: '#dc2626',
+                cancelButtonColor: '#6b7280',
+                confirmButtonText: 'Yes, delete it'
+            });
+            if (!result.isConfirmed) return;
+            try {
+                showLoading();
+                await fetch(`${API_BASE}/servers/${state.selectedServer}/files?path=${path}`, { method: 'DELETE' });
+                await fetchServerDetails();
+                hideLoading();
+            } catch (err) {
+                hideLoading();
+                Swal.fire({
+                    title: 'Error',
+                    text: 'Failed to delete: ' + err.message,
+                    icon: 'error',
+                    confirmButtonColor: '#10b981'
+                });
+            }
+        }
+
+        function openModal(modalId) {
+            document.getElementById(modalId).classList.add('active');
+        }
+
+        function closeModal(modalId) {
+            document.getElementById(modalId).classList.remove('active');
+        }
+
+        // Upload Files
+        function showUploadModal() {
+            openModal('uploadModal');
+        }
+
+        async function uploadFiles() {
+            const input = document.getElementById('uploadInput');
+            const files = input.files;
+            if (files.length === 0) return;
+
+            const formData = new FormData();
+            for (let file of files) {
+                formData.append('files', file);
+            }
+
+            try {
+                showLoading();
+                await fetch(`${API_BASE}/servers/${state.selectedServer}/files/upload?path=${state.currentPath}`, {
+                    method: 'POST',
+                    body: formData
+                });
+                closeModal('uploadModal');
+                input.value = '';
+                await fetchServerDetails();
+                hideLoading();
+                Swal.fire({
+                    title: 'Success',
+                    text: 'Files uploaded successfully!',
+                    icon: 'success',
+                    confirmButtonColor: '#10b981',
+                    timer: 2000,
+                    timerProgressBar: true
+                });
+            } catch (err) {
+                hideLoading();
+                Swal.fire({
+                    title: 'Error',
+                    text: 'Upload failed: ' + err.message,
+                    icon: 'error',
+                    confirmButtonColor: '#10b981'
+                });
+            }
+        }
+
+        // Rename File
+        function showRenameModal(file) {
+            state.selectedFile = file;
+            document.getElementById('renameInput').value = file.name;
+            openModal('renameModal');
+        }
+
+        async function confirmRename() {
+            const newName = document.getElementById('renameInput').value.trim();
+            if (!newName || !state.selectedFile) return;
+
+            try {
+                showLoading();
+                await fetch(`${API_BASE}/servers/${state.selectedServer}/files/rename`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        oldPath: state.selectedFile.path,
+                        newName: newName
+                    })
+                });
+                closeModal('renameModal');
+                await fetchServerDetails();
+                hideLoading();
+            } catch (err) {
+                hideLoading();
+                Swal.fire({
+                    title: 'Error',
+                    text: 'Rename failed: ' + err.message,
+                    icon: 'error',
+                    confirmButtonColor: '#10b981'
+                });
+            }
+        }
+
+        // Edit File
+        async function showEditModal(file) {
+            state.selectedFile = file;
+            document.getElementById('editFileName').textContent = file.name;
+            
+            try {
+                const res = await fetch(`${API_BASE}/servers/${state.selectedServer}/files/content?path=${file.path}`);
+                const content = await res.text();
+                document.getElementById('editContent').value = content;
+                openModal('editModal');
+            } catch (err) {
+                Swal.fire({
+                    title: 'Error',
+                    text: 'Failed to load file: ' + err.message,
+                    icon: 'error',
+                    confirmButtonColor: '#10b981'
+                });
+            }
+        }
+
+        async function saveFileContent() {
+            const content = document.getElementById('editContent').value;
+
+            try {
+                showLoading();
+                await fetch(`${API_BASE}/servers/${state.selectedServer}/files/content`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        path: state.selectedFile.path,
+                        content: content
+                    })
+                });
+                closeModal('editModal');
+                hideLoading();
+                Swal.fire({
+                    title: 'Success',
+                    text: 'File saved successfully!',
+                    icon: 'success',
+                    confirmButtonColor: '#10b981',
+                    timer: 2000,
+                    timerProgressBar: true
+                });
+            } catch (err) {
+                hideLoading();
+                Swal.fire({
+                    title: 'Error',
+                    text: 'Save failed: ' + err.message,
+                    icon: 'error',
+                    confirmButtonColor: '#10b981'
+                });
+            }
+        }
+
+        // Create Folder
+        function showNewFolderModal() {
+            openModal('newFolderModal');
+        }
+
+        async function createFolder() {
+            const name = document.getElementById('folderNameInput').value.trim();
+            if (!name) return;
+
+            try {
+                showLoading();
+                await fetch(`${API_BASE}/servers/${state.selectedServer}/files/folder`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        path: state.currentPath,
+                        name: name
+                    })
+                });
+                closeModal('newFolderModal');
+                document.getElementById('folderNameInput').value = '';
+                await fetchServerDetails();
+                hideLoading();
+            } catch (err) {
+                hideLoading();
+                Swal.fire({
+                    title: 'Error',
+                    text: 'Failed to create folder: ' + err.message,
+                    icon: 'error',
+                    confirmButtonColor: '#10b981'
+                });
+            }
+        }
+
+        // Context Menu
+        function showContextMenu(event, file) {
+            event.preventDefault();
+            state.contextMenuFile = file;
+            const menu = document.getElementById('contextMenu');
+            menu.style.left = event.pageX + 'px';
+            menu.style.top = event.pageY + 'px';
+            menu.classList.add('active');
+        }
+
+        function hideContextMenu() {
+            document.getElementById('contextMenu').classList.remove('active');
+        }
+
+        async function contextAction(action) {
+            if (!state.contextMenuFile) return;
+            hideContextMenu();
+
+            const filePath = state.contextMenuFile.path;
+            const fullPath = state.contextMenuFile.path;
+
+            switch(action) {
+                case 'download':
+                    downloadFile(filePath);
+                    break;
+                case 'zip':
+                    const zipResult = await Swal.fire({
+                        title: 'Create Zip File',
+                        input: 'text',
+                        inputLabel: 'Enter zip file name (with .zip extension):',
+                        inputValue: `${state.contextMenuFile.name}.zip`,
+                        showCancelButton: true,
+                        confirmButtonColor: '#10b981',
+                        cancelButtonColor: '#6b7280',
+                        inputValidator: (value) => {
+                            if (!value) {
+                                return 'Zip file name is required!';
+                            }
+                        }
+                    });
+                    if (zipResult.isConfirmed && zipResult.value) {
+                        try {
+                            showLoading();
+                            const response = await fetch(`${API_BASE}/servers/${state.selectedServer}/zip`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    sourcePath: fullPath,
+                                    zipName: zipResult.value
+                                })
+                            });
+                            const result = await response.json();
+                            if (response.ok) {
+                                hideLoading();
+                                Swal.fire({
+                                    title: 'Success',
+                                    text: `Successfully created ${result.zipName}`,
+                                    icon: 'success',
+                                    confirmButtonColor: '#10b981',
+                                    timer: 2000,
+                                    timerProgressBar: true
+                                });
+                                await fetchServerDetails();
+                            } else {
+                                hideLoading();
+                                throw new Error(result.error || 'Failed to create zip');
+                            }
+                        } catch (err) {
+                            hideLoading();
+                            Swal.fire({
+                                title: 'Error',
+                                text: `Error creating zip: ${err.message}`,
+                                icon: 'error',
+                                confirmButtonColor: '#10b981'
+                            });
+                            console.error('Zip error:', err);
+                        }
+                    }
+                    break;
+                case 'unzip':
+                    if (!state.contextMenuFile.name.toLowerCase().endsWith('.zip')) {
+                        Swal.fire({
+                            title: 'Invalid File',
+                            text: 'Please select a .zip file to extract',
+                            icon: 'warning',
+                            confirmButtonColor: '#10b981'
+                        });
+                        return;
+                    }
+                    const unzipResult = await Swal.fire({
+                        title: 'Extract Zip File',
+                        input: 'text',
+                        inputLabel: 'Enter extraction path (leave empty for current directory):',
+                        inputValue: state.currentPath,
+                        showCancelButton: true,
+                        confirmButtonColor: '#10b981',
+                        cancelButtonColor: '#6b7280'
+                    });
+                    if (unzipResult.isDismissed) return;
+                    const extractPath = unzipResult.value || state.currentPath;
+                    try {
+                        showLoading();
+                        const response = await fetch(`${API_BASE}/servers/${state.selectedServer}/unzip`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                zipPath: fullPath,
+                                extractPath: extractPath
+                            })
+                        });
+                        const result = await response.json();
+                        if (response.ok) {
+                            hideLoading();
+                            Swal.fire({
+                                title: 'Success',
+                                text: `Successfully extracted to ${result.extractPath}`,
+                                icon: 'success',
+                                confirmButtonColor: '#10b981',
+                                timer: 2000,
+                                timerProgressBar: true
+                            });
+                            await fetchServerDetails();
+                        } else {
+                            hideLoading();
+                            throw new Error(result.error || 'Failed to extract zip');
+                        }
+                    } catch (err) {
+                        hideLoading();
+                        Swal.fire({
+                            title: 'Error',
+                            text: `Error extracting zip: ${err.message}`,
+                            icon: 'error',
+                            confirmButtonColor: '#10b981'
+                        });
+                        console.error('Unzip error:', err);
+                    }
+                    break;
+                case 'rename':
+                    showRenameModal(state.contextMenuFile);
+                    break;
+                case 'edit':
+                    showEditModal(state.contextMenuFile);
+                    break;
+                case 'delete':
+                    const deleteResult = await Swal.fire({
+                        title: 'Delete File',
+                        text: `Delete ${state.contextMenuFile.name}?`,
+                        icon: 'warning',
+                        showCancelButton: true,
+                        confirmButtonColor: '#dc2626',
+                        cancelButtonColor: '#6b7280',
+                        confirmButtonText: 'Yes, delete it'
+                    });
+                    if (deleteResult.isConfirmed) {
+                        await deleteFile(filePath);
+                        await fetchServerDetails();
+                    }
+                    break;
+            }
+        }
+
+        document.addEventListener('click', hideContextMenu);
+
+        // Server Context Menu Functions
+        function showServerContextMenu(event, serverId) {
+            event.preventDefault();
+            state.serverContextMenuId = serverId;
+            const menu = document.getElementById('serverContextMenu');
+            menu.style.left = event.pageX + 'px';
+            menu.style.top = event.pageY + 'px';
+            menu.classList.add('active');
+        }
+
+        function hideServerContextMenu() {
+            document.getElementById('serverContextMenu').classList.remove('active');
+        }
+
+        async function serverContextAction(action) {
+            if (!state.serverContextMenuId) return;
+            const serverId = state.serverContextMenuId;
+            hideServerContextMenu();
+
+            const server = state.servers.find(s => s.id === serverId);
+            if (!server) return;
+
+            switch(action) {
+                case 'rename':
+                    const result = await Swal.fire({
+                        title: 'Rename Server',
+                        input: 'text',
+                        inputLabel: 'Enter new server name:',
+                        inputValue: server.name,
+                        showCancelButton: true,
+                        confirmButtonColor: '#10b981',
+                        cancelButtonColor: '#6b7280',
+                        inputValidator: (value) => {
+                            if (!value) {
+                                return 'Server name is required!';
+                            }
+                        }
+                    });
+                    if (!result.isConfirmed || !result.value) return;
+                    const newName = result.value;
+                    try {
+                        showLoading();
+                        await fetch(`${API_BASE}/servers/${serverId}/rename`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ name: newName })
+                        });
+                        await fetchServers();
+                        hideLoading();
+                        Swal.fire({
+                            title: 'Success',
+                            text: 'Server renamed successfully!',
+                            icon: 'success',
+                            confirmButtonColor: '#10b981',
+                            timer: 2000,
+                            timerProgressBar: true
+                        });
+                    } catch (err) {
+                        hideLoading();
+                        Swal.fire({
+                            title: 'Error',
+                            text: 'Failed to rename server: ' + err.message,
+                            icon: 'error',
+                            confirmButtonColor: '#10b981'
+                        });
+                    }
+                    break;
+                case 'delete':
+                    const deleteResult = await Swal.fire({
+                        title: 'Delete Server',
+                        text: `Are you sure you want to delete "${server.name}"? This action cannot be undone.`,
+                        icon: 'warning',
+                        showCancelButton: true,
+                        confirmButtonColor: '#dc2626',
+                        cancelButtonColor: '#6b7280',
+                        confirmButtonText: 'Yes, delete it!'
+                    });
+                    if (!deleteResult.isConfirmed) return;
+                    try {
+                        showLoading();
+                        await fetch(`${API_BASE}/servers/${serverId}`, { method: 'DELETE' });
+                        await fetchServers();
+                        hideLoading();
+                    } catch (err) {
+                        hideLoading();
+                        console.error(`Failed to delete server:`, err);
+                        Swal.fire({
+                            title: 'Error',
+                            text: `Failed to delete server: ${err.message}`,
+                            icon: 'error',
+                            confirmButtonColor: '#10b981'
+                        });
+                    }
+                    break;
+            }
+        }
+
+        document.addEventListener('click', hideServerContextMenu);
+
+        // Addon Management Functions
+        function showAddonUploadModal() {
+            openModal('addonUploadModal');
+        }
+
+        async function uploadAddon() {
+            const input = document.getElementById('addonUploadInput');
+            const file = input.files[0];
+            const uploadBtn = document.getElementById('uploadAddonBtn');
+            const progressDiv = document.getElementById('uploadProgress');
+
+            if (!file) {
+                Swal.fire({
+                    title: 'No File Selected',
+                    text: 'Please select a file to upload',
+                    icon: 'warning',
+                    confirmButtonColor: '#10b981'
+                });
+                return;
+            }
+
+            // Show progress spinner and disable button
+            progressDiv.classList.remove('hidden');
+            uploadBtn.disabled = true;
+            uploadBtn.textContent = 'Uploading...';
+
+            const formData = new FormData();
+            formData.append('addon', file);
+
+            try {
+                const response = await fetch(`${API_BASE}/servers/${state.selectedServer}/addons/upload`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    closeModal('addonUploadModal');
+                    input.value = '';
+                    await fetchServerDetails();
+                    Swal.fire({
+                        title: 'Success',
+                        html: `✅ ${result.filename} uploaded successfully!<br><br>Type: ${result.type}<br><br>${result.type === 'mcworld' || result.type === 'mctemplate' ? 'World uploaded to worlds folder.' : 'Enable the addon below and restart the server to apply changes.'}`,
+                        icon: 'success',
+                        confirmButtonColor: '#10b981'
+                    });
+                } else {
+                    throw new Error(result.error || 'Upload failed');
+                }
+            } catch (err) {
+                alert('❌ Upload failed: ' + err.message);
+                console.error('Upload error:', err);
+            } finally {
+                // Hide progress spinner and re-enable button
+                progressDiv.classList.add('hidden');
+                uploadBtn.disabled = false;
+                uploadBtn.textContent = 'Upload';
+            }
+        }
+
+        async function toggleAddon(type, name) {
+            try {
+                showLoading();
+                const response = await fetch(`${API_BASE}/servers/${state.selectedServer}/addons/${type}/${encodeURIComponent(name)}/toggle`, {
+                    method: 'POST'
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    await fetchServerDetails();
+                    hideLoading();
+                    Swal.fire({
+                        title: 'Success',
+                        html: `✅ ${result.message}<br><br>⚠️ Please restart the server for changes to take effect.`,
+                        icon: 'success',
+                        confirmButtonColor: '#10b981'
+                    });
+                } else {
+                    hideLoading();
+                    throw new Error(result.error || 'Toggle failed');
+                }
+            } catch (err) {
+                hideLoading();
+                Swal.fire({
+                    title: 'Error',
+                    text: '❌ Failed to toggle addon: ' + err.message,
+                    icon: 'error',
+                    confirmButtonColor: '#10b981'
+                });
+                console.error('Toggle error:', err);
+            }
+        }
+
+        async function deleteAddon(type, name) {
+            const result = await Swal.fire({
+                title: 'Delete Addon',
+                text: `Delete ${name}? This will permanently remove the addon from the server.`,
+                icon: 'warning',
+                showCancelButton: true,
+                confirmButtonColor: '#dc2626',
+                cancelButtonColor: '#6b7280',
+                confirmButtonText: 'Yes, delete it'
+            });
+            if (!result.isConfirmed) return;
+
+            try {
+                showLoading();
+                const response = await fetch(`${API_BASE}/servers/${state.selectedServer}/addons/${type}/${encodeURIComponent(name)}`, {
+                    method: 'DELETE'
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    await fetchServerDetails();
+                    hideLoading();
+                    Swal.fire({
+                        title: 'Success',
+                        text: '✅ Addon deleted successfully',
+                        icon: 'success',
+                        confirmButtonColor: '#10b981',
+                        timer: 2000,
+                        timerProgressBar: true
+                    });
+                } else {
+                    hideLoading();
+                    throw new Error(result.error || 'Delete failed');
+                }
+            } catch (err) {
+                hideLoading();
+                Swal.fire({
+                    title: 'Error',
+                    text: '❌ Failed to delete addon: ' + err.message,
+                    icon: 'error',
+                    confirmButtonColor: '#10b981'
+                });
+                console.error('Delete error:', err);
+            }
+        }
+
+        async function deleteWorld(worldName) {
+            const currentWorld = state.config['level-name'];
+            if (worldName === currentWorld) {
+                Swal.fire({
+                    title: 'Cannot Delete Active World',
+                    text: 'You cannot delete the currently active world. Please enable another world first.',
+                    icon: 'warning',
+                    confirmButtonColor: '#10b981'
+                });
+                return;
+            }
+
+            const result = await Swal.fire({
+                title: 'Delete World',
+                text: `Delete world "${worldName}"? This will permanently remove the world from the server.`,
+                icon: 'warning',
+                showCancelButton: true,
+                confirmButtonColor: '#dc2626',
+                cancelButtonColor: '#6b7280',
+                confirmButtonText: 'Yes, delete it'
+            });
+            if (!result.isConfirmed) return;
+
+            try {
+                showLoading();
+                const response = await fetch(`${API_BASE}/servers/${state.selectedServer}/worlds/${encodeURIComponent(worldName)}`, {
+                    method: 'DELETE'
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    await fetchServerDetails();
+                    hideLoading();
+                    Swal.fire({
+                        title: 'Success',
+                        text: '✅ World deleted successfully',
+                        icon: 'success',
+                        confirmButtonColor: '#10b981',
+                        timer: 2000,
+                        timerProgressBar: true
+                    });
+                } else {
+                    hideLoading();
+                    throw new Error(result.error || 'Delete failed');
+                }
+            } catch (err) {
+                hideLoading();
+                Swal.fire({
+                    title: 'Error',
+                    text: '❌ Failed to delete world: ' + err.message,
+                    icon: 'error',
+                    confirmButtonColor: '#10b981'
+                });
+                console.error('Delete world error:', err);
+            }
+        }
+
+        async function enableWorld(worldName) {
+            const result = await Swal.fire({
+                title: 'Enable World',
+                html: `Enable world "${worldName}"?<br><br>This will change the server level-name to "${worldName}" and restart the server.`,
+                icon: 'question',
+                showCancelButton: true,
+                confirmButtonColor: '#10b981',
+                cancelButtonColor: '#6b7280',
+                confirmButtonText: 'Yes, enable world'
+            });
+            if (!result.isConfirmed) return;
+
+            try {
+                showLoading();
+                const response = await fetch(`${API_BASE}/servers/${state.selectedServer}/worlds/${encodeURIComponent(worldName)}/enable`, {
+                    method: 'POST'
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    hideLoading();
+                    Swal.fire({
+                        title: 'Success',
+                        html: `✅ World "${worldName}" enabled successfully!<br><br>⚠️ Server will restart to apply changes.`,
+                        icon: 'success',
+                        confirmButtonColor: '#10b981'
+                    });
+                } else {
+                    hideLoading();
+                    throw new Error(result.error || 'Enable failed');
+                }
+            } catch (err) {
+                hideLoading();
+                Swal.fire({
+                    title: 'Error',
+                    text: '❌ Failed to enable world: ' + err.message,
+                    icon: 'error',
+                    confirmButtonColor: '#10b981'
+                });
+                console.error('Enable world error:', err);
+            }
+        }
+
+        // Render functions
+        function renderSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            if (sidebar) {
+                sidebar.innerHTML = `
+                    <div class="p-3">
+                        <h2 class="text-xs font-semibold text-gray-400 uppercase mb-2">Servers</h2>
+                        ${state.servers.map(server => `
+                            <button
+                                onclick="selectServer('${server.id}')"
+                                oncontextmenu="showServerContextMenu(event, '${server.id}')"
+                                class="w-full text-left p-2 rounded-lg mb-1.5 transition text-sm ${
+                                    state.selectedServer === server.id
+                                        ? 'bg-green-600 text-white'
+                                        : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+                                }">
+                                <div class="flex items-center justify-between">
+                                    <div>
+                                        <div class="font-medium truncate">${server.name}</div>
+                                        <div class="text-xs text-white-400">Port: ${server.ports?.find(p => p.PrivatePort === 19132)?.PublicPort || '19132'}</div>
+                                    </div>
+                                    <span class="status-dot ${server.status === 'running' ? 'bg-green-500' : 'bg-red-500'}"></span>
+                                </div>
+                                <div class="text-xs mt-0.5 opacity-75">
+                                    ${server.status} • ${state.selectedServer === server.id ? state.players.length : 0} players
+                                </div>
+                            </button>
+                        `).join('')}
+                    </div>
+                `;
+            }
+        }
+
+        function render() {
+            const app = document.getElementById('app');
+            const currentServer = state.servers.find(s => s.id === state.selectedServer);
+
+            // Force full render when switching servers or if explicitly requested
+            if (state.forceFullRender) {
+                state.forceFullRender = false;
+                // Full render for server switch
+            } else {
+                // Only update the main content area, not the entire app to preserve scroll positions
+                const mainContent = document.getElementById('mainContent');
+                if (mainContent) {
+                    mainContent.innerHTML = renderTabContent(currentServer);
+                    return;
+                }
+            }
+
+            app.innerHTML = `
+                <!-- Header -->
+                <div class="bg-gray-800 border-b border-gray-700 px-4 py-2.5">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-3">
+                            <button onclick="toggleSidebar()" class="mobile-menu-btn px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded-lg">
+                                ☰
+                            </button>
+                            <h1 class="text-lg md:text-xl font-bold">🎮 Bedrock Server Manager</h1>
+                        </div>
+                        <button onclick="createServer()" class="px-2 md:px-3 py-1.5 text-xs md:text-sm bg-green-600 hover:bg-green-700 rounded-lg">
+                            <span class="hidden sm:inline">+ New Server</span>
+                            <span class="sm:hidden">+</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Sidebar Overlay -->
+                <div id="sidebarOverlay" class="sidebar-overlay" onclick="toggleSidebar()"></div>
+
+                <div class="flex relative" style="height: calc(100vh - 53px)">
+                    <!-- Sidebar -->
+                    <div id="sidebar" class="sidebar w-56 bg-gray-800 border-r border-gray-700 overflow-y-auto">
+                        <div class="p-3">
+                            <h2 class="text-xs font-semibold text-gray-400 uppercase mb-2">Servers</h2>
+                            ${state.servers.map(server => `
+                                <button
+                                    onclick="selectServer('${server.id}')"
+                                    class="w-full text-left p-2 rounded-lg mb-1.5 transition text-sm ${
+                                        state.selectedServer === server.id
+                                            ? 'bg-green-600 text-white'
+                                            : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+                                    }">
+                                    <div class="flex items-center justify-between">
+                                        <div>
+                                            <div class="font-medium truncate">${server.name}</div>
+                                            <div class="text-xs text-white-400">Port: ${server.ports?.find(p => p.PrivatePort === 19132)?.PublicPort || '19132'}</div>
+                                        </div>
+                                        <span class="status-dot ${server.status === 'running' ? 'bg-green-500' : 'bg-red-500'}"></span>
+                                    </div>
+                                    <div class="text-xs mt-0.5 opacity-75">
+                                        ${server.status} • ${state.selectedServer === server.id ? state.players.length : 0} players
+                                    </div>
+                                </button>
+                            `).join('')}
+                        </div>
+                    </div>
+
+                    <!-- Main Content -->
+                    <div class="flex-1 flex flex-col overflow-hidden">
+                        ${currentServer ? `
+                            <!-- Server Controls -->
+                            <div class="bg-gray-800 border-b border-gray-700 px-4 py-2.5">
+                                <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+                                    <div class="flex-1 min-w-0">
+                                        <h2 class="text-base md:text-lg font-bold truncate">${currentServer.name}</h2>
+                                        <div class="text-xs text-gray-400 mt-0.5 truncate">
+                                            ${currentServer.status} • ${state.players.length}/${currentServer.maxPlayers || 10} players • ${currentServer.worldSize}
+                                        </div>
+                                    </div>
+                                    <div class="flex gap-1.5 flex-wrap">
+                                        ${currentServer.status === 'running' ? `
+                                            <button onclick="serverAction('restart')" class="px-2 md:px-2.5 py-1.5 text-xs md:text-sm bg-yellow-600 hover:bg-yellow-700 rounded-lg whitespace-nowrap">
+                                                🔄 <span class="hidden sm:inline">Restart</span>
+                                            </button>
+                                            <button onclick="serverAction('stop')" class="px-2 md:px-2.5 py-1.5 text-xs md:text-sm bg-red-600 hover:bg-red-700 rounded-lg whitespace-nowrap">
+                                                ⏹️ <span class="hidden sm:inline">Stop</span>
+                                            </button>
+                                        ` : `
+                                            <button onclick="serverAction('start')" class="px-2 md:px-2.5 py-1.5 text-xs md:text-sm bg-green-600 hover:bg-green-700 rounded-lg whitespace-nowrap">
+                                                ▶️ <span class="hidden sm:inline">Start</span>
+                                            </button>
+                                        `}
+                                        <button onclick="serverAction('delete')" class="px-2 md:px-2.5 py-1.5 text-xs md:text-sm bg-red-600 hover:bg-red-700 rounded-lg whitespace-nowrap">
+                                            🗑️ <span class="hidden sm:inline">Delete</span>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Tabs -->
+                            <div class="bg-gray-800 border-b border-gray-700 px-4 flex gap-2 overflow-x-auto whitespace-nowrap">
+                                ${['dashboard', 'console', 'players', 'files', 'addons', 'backups', 'config'].map(tab => `
+                                    <button
+                                        onclick="switchTab('${tab}')"
+                                        class="px-3 py-2 text-xs md:text-sm capitalize flex-shrink-0 ${state.activeTab === tab ? 'tab-active' : 'text-gray-400 hover:text-gray-200'}">
+                                        ${tab}
+                                    </button>
+                                `).join('')}
+                            </div>
+
+                            <!-- Tab Content -->
+                            <div id="mainContent" class="flex-1 overflow-y-auto p-4">
+                                ${renderTabContent(currentServer)}
+                            </div>
+                        ` : '<div class="flex items-center justify-center h-full text-gray-500">Select a server</div>'}
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderTabContent(server) {
+            switch(state.activeTab) {
+                case 'dashboard':
+                    return `
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div class="bg-gray-800 rounded-lg p-4">
+                                <h3 class="text-base font-semibold mb-3">📊 Server Stats</h3>
+                                <div class="space-y-2">
+                                    <div class="flex justify-between text-sm">
+                                        <span class="text-gray-400">Uptime</span>
+                                        <span class="font-mono">${server.uptime || '0h 0m'}</span>
+                                    </div>
+                                    <div class="flex justify-between text-sm">
+                                        <span class="text-gray-400">Memory</span>
+                                        <span class="font-mono">${server.memory || '0 MB'}</span>
+                                    </div>
+                                    <div class="flex justify-between text-sm">
+                                        <span class="text-gray-400">World Size</span>
+                                        <span class="font-mono">${server.worldSize || '0 MB'}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="bg-gray-800 rounded-lg p-4">
+                                <h3 class="text-base font-semibold mb-3">⚡ Quick Actions</h3>
+                                <div class="space-y-1.5">
+                                    <button onclick="createBackup()" class="w-full p-2 text-sm bg-blue-600 hover:bg-blue-700 rounded-lg text-left">
+                                        💾 Create Backup
+                                    </button>
+                                    <button onclick="switchTab('files')" class="w-full p-2 text-sm bg-purple-600 hover:bg-purple-700 rounded-lg text-left">
+                                        📁 Browse Files
+                                    </button>
+                                    <button onclick="switchTab('config')" class="w-full p-2 text-sm bg-orange-600 hover:bg-orange-700 rounded-lg text-left">
+                                        ⚙️ Edit Config
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="bg-gray-800 rounded-lg p-4 md:col-span-2">
+                                <h3 class="text-base font-semibold mb-3">📜 Recent Logs</h3>
+                                <div class="bg-gray-900 rounded p-3 h-48 overflow-y-auto log-container">
+                                    ${state.logs.slice(-20).map(log => `<div class="text-gray-400 mb-0.5 text-xs">${log}</div>`).join('')}
+                                </div>
+                            </div>
+                        </div>
+                    `;
+
+                case 'console':
+                    return `
+                        <div class="bg-gray-800 rounded-lg p-4">
+                            <div class="bg-gray-900 rounded p-3 log-container mb-3">
+                                ${state.logs.map(log => `<div class="text-gray-400 mb-0.5">${log}</div>`).join('')}
+                            </div>
+                            <div class="flex gap-2">
+                                <input 
+                                    type="text" 
+                                    id="consoleInput"
+                                    value="${state.consoleCommand}"
+                                    oninput="state.consoleCommand = this.value"
+                                    onkeypress="if(event.key==='Enter') executeCommand()"
+                                    placeholder="Enter command..."
+                                    class="flex-1 px-3 py-2 text-sm bg-gray-900 border border-gray-700 rounded-lg focus:outline-none focus:border-green-500">
+                                <button onclick="executeCommand()" class="px-4 py-2 text-sm bg-green-600 hover:bg-green-700 rounded-lg">
+                                    ▶️ Run
+                                </button>
+                            </div>
+                        </div>
+                    `;
+
+                case 'players':
+                    return `
+                        <div class="bg-gray-800 rounded-lg p-4">
+                            <div class="flex items-center justify-between mb-3">
+                                <h3 class="text-base font-semibold">👥 Online Players (${state.players.length})</h3>
+                            </div>
+                            ${state.players.length === 0 ? `
+                                <div class="text-center py-8 text-gray-500">
+                                    <div class="text-3xl mb-2">👤</div>
+                                    <div class="text-sm">No players online</div>
+                                </div>
+                            ` : `
+                                <div class="space-y-1.5">
+                                    ${state.players.map(player => `
+                                        <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between p-3 bg-gray-900 rounded-lg gap-2">
+                                            <div class="flex items-center gap-2">
+                                                <div class="w-8 h-8 bg-green-600 rounded-lg flex items-center justify-center text-lg flex-shrink-0">
+                                                    👤
+                                                </div>
+                                                <div>
+                                                    <div class="font-medium text-sm">${player.name}</div>
+                                                    <div class="text-xs text-gray-400">Connected</div>
+                                                </div>
+                                            </div>
+                                            <div class="flex gap-1.5 flex-wrap w-full sm:w-auto">
+                                                <button 
+                                                    onclick="opPlayer('${player.name}')" 
+                                                    class="px-2 py-1 text-xs bg-blue-600 hover:bg-blue-700 rounded-lg flex-1 sm:flex-initial"
+                                                    title="Make Operator">
+                                                    👑 OP
+                                                </button>
+                                                <button 
+                                                    onclick="deopPlayer('${player.name}')" 
+                                                    class="px-2 py-1 text-xs bg-gray-600 hover:bg-gray-700 rounded-lg flex-1 sm:flex-initial"
+                                                    title="Remove Operator">
+                                                    ⬇️ Deop
+                                                </button>
+                                                <button 
+                                                    onclick="kickPlayer('${player.name}')" 
+                                                    class="px-2 py-1 text-xs bg-yellow-600 hover:bg-yellow-700 rounded-lg flex-1 sm:flex-initial"
+                                                    title="Kick Player">
+                                                    👢 Kick
+                                                </button>
+                                                <button 
+                                                    onclick="banPlayer('${player.name}')" 
+                                                    class="px-2 py-1 text-xs bg-red-600 hover:bg-red-700 rounded-lg flex-1 sm:flex-initial"
+                                                    title="Ban Player">
+                                                    🚫 Ban
+                                                </button>
+                                            </div>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            `}
+                            <div class="mt-4 p-3 bg-gray-900 rounded-lg">
+                                <h4 class="font-semibold text-sm mb-1.5">💡 Player Management Tips</h4>
+                                <ul class="text-xs text-gray-400 space-y-0.5">
+                                    <li>• <strong>OP</strong> - Give player operator permissions (admin)</li>
+                                    <li>• <strong>Deop</strong> - Remove operator permissions</li>
+                                    <li>• <strong>Kick</strong> - Temporarily remove player from server</li>
+                                    <li>• <strong>Ban</strong> - Permanently ban player from server</li>
+                                </ul>
+                            </div>
+                        </div>
+                    `;
+
+                case 'files':
+                    return `
+                        <div class="bg-gray-800 rounded-lg p-4">
+                            <div class="flex items-center justify-between mb-3">
+                                <div class="flex items-center gap-2">
+                                    ${state.currentPath !== '/' ? `
+                                        <button onclick="goUpDirectory()" class="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 rounded">
+                                            ⬆️ Up
+                                        </button>
+                                    ` : ''}
+                                    <div class="text-xs font-mono">📁 ${state.currentPath}</div>
+                                </div>
+                                <div class="flex gap-1.5">
+                                    <button onclick="showNewFolderModal()" class="px-2.5 py-1.5 text-sm bg-blue-600 hover:bg-blue-700 rounded-lg">
+                                        📁 New Folder
+                                    </button>
+                                    <button onclick="showUploadModal()" class="px-2.5 py-1.5 text-sm bg-green-600 hover:bg-green-700 rounded-lg">
+                                        📤 Upload
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="space-y-1.5">
+                                ${state.files.length === 0 ? '<div class="text-gray-500 text-center text-sm py-6">Empty directory</div>' : ''}
+                                ${state.files.map(file => `
+                                    <div 
+                                        class="flex items-center justify-between p-2 bg-gray-900 rounded-lg hover:bg-gray-700 cursor-pointer"
+                                        oncontextmenu="showContextMenu(event, ${JSON.stringify(file).replace(/"/g, '&quot;')})"
+                                        ondblclick="${file.type === 'directory' ? `navigateFolder('${file.path}')` : `showEditModal(${JSON.stringify(file).replace(/"/g, '&quot;')})`}">
+                                        <div class="flex items-center gap-2 min-w-0 flex-1">
+                                            <span class="text-lg flex-shrink-0">${file.type === 'directory' ? '📁' : '📄'}</span>
+                                            <div class="min-w-0 flex-1">
+                                                <div class="text-sm truncate">${file.name}</div>
+                                                <div class="text-xs text-gray-500">${file.size}</div>
+                                            </div>
+                                        </div>
+                                        <div class="flex items-center gap-1 flex-shrink-0">
+                                            ${file.type === 'file' ? `
+                                                <button onclick="showEditModal(${JSON.stringify(file).replace(/"/g, '&quot;')}); event.stopPropagation();" class="px-1.5 py-1 text-sm hover:bg-gray-600 rounded hidden sm:block" title="Edit">📝</button>
+                                            ` : ''}
+                                            ${file.type === 'directory' ? `
+                                                <button onclick="navigateFolder('${file.path}'); event.stopPropagation();" class="px-1.5 py-1 text-sm hover:bg-gray-600 rounded" title="Open">📂</button>
+                                            ` : ''}
+                                            <button onclick="showRenameModal(${JSON.stringify(file).replace(/"/g, '&quot;')}); event.stopPropagation();" class="px-1.5 py-1 text-sm hover:bg-gray-600 rounded hidden sm:block" title="Rename">✏️</button>
+                                            ${file.type === 'file' ? `
+                                                <button onclick="downloadFile('${file.path}'); event.stopPropagation();" class="px-1.5 py-1 text-sm hover:bg-gray-600 rounded hidden sm:block" title="Download">⬇️</button>
+                                            ` : ''}
+                                            <button onclick="deleteFile('${file.path}'); event.stopPropagation();" class="px-1.5 py-1 text-sm hover:bg-red-600 rounded hidden sm:block" title="Delete">🗑️</button>
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                            <div class="mt-3 text-xs text-gray-500">
+                                💡 Tip: Double-click file to edit, double-click folder to open. Right-click for more options.
+                            </div>
+                        </div>
+                    `;
+
+                case 'addons':
+                    return `
+                        <div class="space-y-4">
+                            <div class="bg-gray-800 rounded-lg p-4">
+                                <div class="flex items-center justify-between mb-3">
+                                    <h3 class="text-base font-semibold">📦 Addon Management</h3>
+                                    <button onclick="showAddonUploadModal()" class="px-3 py-1.5 text-sm bg-green-600 hover:bg-green-700 rounded-lg">
+                                        + Upload Addon
+                                    </button>
+                                </div>
+                                <div class="text-xs text-gray-400 mb-3">
+                                    <p>💡 Upload .mcaddon, .mcpack, .mcworld, or .mctemplate files. After uploading behavior/resource packs, enable them below and restart the server.</p>
+                                </div>
+                            </div>
+
+                            <!-- Addon Tabs -->
+                            <div class="bg-gray-800 border-b border-gray-700 px-4 flex gap-2 overflow-x-auto whitespace-nowrap">
+                                ${['behavior', 'resource', 'world'].map(tab => `
+                                    <button
+                                        onclick="switchAddonTab('${tab}')"
+                                        class="px-3 py-2 text-xs md:text-sm capitalize flex-shrink-0 ${state.activeAddonTab === tab ? 'tab-active' : 'text-gray-400 hover:text-gray-200'}">
+                                        ${tab === 'behavior' ? '🎮 Behavior Packs' : tab === 'resource' ? '🎨 Resource Packs' : '🌍 Worlds'}
+                                    </button>
+                                `).join('')}
+                            </div>
+
+                            <!-- Tab Content -->
+                            <div class="bg-gray-800 rounded-lg p-4">
+                                ${state.activeAddonTab === 'behavior' ? `
+                                    <h3 class="text-base font-semibold mb-3">🎮 Behavior Packs</h3>
+                                    ${state.addons.behaviorPacks.length === 0 ? `
+                                        <div class="text-center py-6 text-gray-500">
+                                            <div class="text-3xl mb-2">📦</div>
+                                            <div class="text-sm">No behavior packs installed</div>
+                                        </div>
+                                    ` : `
+                                        <div class="space-y-2">
+                                            ${state.addons.behaviorPacks.map(pack => `
+                                                <div class="p-3 bg-gray-900 rounded-lg">
+                                                    <div class="flex items-start justify-between gap-3">
+                                                        <div class="flex-1 min-w-0">
+                                                            <div class="flex items-center gap-2 mb-1">
+                                                                <span class="font-medium text-sm truncate">${pack.name}</span>
+                                                                ${pack.enabled ? '<span class="px-2 py-0.5 text-xs bg-green-600 rounded">✓ Enabled</span>' : '<span class="px-2 py-0.5 text-xs bg-gray-600 rounded">Disabled</span>'}
+                                                            </div>
+                                                            ${pack.description ? `<div class="text-xs text-gray-400 mb-1">${pack.description}</div>` : ''}
+                                                            <div class="text-xs text-gray-500">
+                                                                ${pack.version ? `v${pack.version.join('.')} • ` : ''}${formatBytes(pack.size)} • ${new Date(pack.modified).toLocaleDateString()}
+                                                            </div>
+                                                        </div>
+                                                        <div class="flex gap-1.5 flex-shrink-0">
+                                                            <button
+                                                                onclick="toggleAddon('behavior', '${pack.name}')"
+                                                                class="px-3 py-1.5 text-xs ${pack.enabled ? 'bg-yellow-600 hover:bg-yellow-700' : 'bg-green-600 hover:bg-green-700'} rounded-lg whitespace-nowrap">
+                                                                ${pack.enabled ? '⏸️ Disable' : '▶️ Enable'}
+                                                            </button>
+                                                            <button
+                                                                onclick="deleteAddon('behavior', '${pack.name}')"
+                                                                class="px-2 py-1.5 text-xs bg-red-600 hover:bg-red-700 rounded-lg">
+                                                                🗑️
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            `).join('')}
+                                        </div>
+                                    `}
+                                ` : state.activeAddonTab === 'resource' ? `
+                                    <h3 class="text-base font-semibold mb-3">🎨 Resource Packs</h3>
+                                    ${state.addons.resourcePacks.length === 0 ? `
+                                        <div class="text-center py-6 text-gray-500">
+                                            <div class="text-3xl mb-2">🎨</div>
+                                            <div class="text-sm">No resource packs installed</div>
+                                        </div>
+                                    ` : `
+                                        <div class="space-y-2">
+                                            ${state.addons.resourcePacks.map(pack => `
+                                                <div class="p-3 bg-gray-900 rounded-lg">
+                                                    <div class="flex items-start justify-between gap-3">
+                                                        <div class="flex-1 min-w-0">
+                                                            <div class="flex items-center gap-2 mb-1">
+                                                                <span class="font-medium text-sm truncate">${pack.name}</span>
+                                                                ${pack.enabled ? '<span class="px-2 py-0.5 text-xs bg-green-600 rounded">✓ Enabled</span>' : '<span class="px-2 py-0.5 text-xs bg-gray-600 rounded">Disabled</span>'}
+                                                            </div>
+                                                            ${pack.description ? `<div class="text-xs text-gray-400 mb-1">${pack.description}</div>` : ''}
+                                                            <div class="text-xs text-gray-500">
+                                                                ${pack.version ? `v${pack.version.join('.')} • ` : ''}${formatBytes(pack.size)} • ${new Date(pack.modified).toLocaleDateString()}
+                                                            </div>
+                                                        </div>
+                                                        <div class="flex gap-1.5 flex-shrink-0">
+                                                            <button
+                                                                onclick="toggleAddon('resource', '${pack.name}')"
+                                                                class="px-3 py-1.5 text-xs ${pack.enabled ? 'bg-yellow-600 hover:bg-yellow-700' : 'bg-green-600 hover:bg-green-700'} rounded-lg whitespace-nowrap">
+                                                                ${pack.enabled ? '⏸️ Disable' : '▶️ Enable'}
+                                                            </button>
+                                                            <button
+                                                                onclick="deleteAddon('resource', '${pack.name}')"
+                                                                class="px-2 py-1.5 text-xs bg-red-600 hover:bg-red-700 rounded-lg">
+                                                                🗑️
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            `).join('')}
+                                        </div>
+                                    `}
+                                ` : `
+                                <h3 class="text-base font-semibold mb-3">🌍 Worlds</h3>
+                                ${state.worlds.length === 0 ? `
+                                    <div class="text-center py-6 text-gray-500">
+                                        <div class="text-3xl mb-2">🌍</div>
+                                        <div class="text-sm">No worlds found</div>
+                                    </div>
+                                ` : `
+                                    <div class="space-y-2">
+                                        ${state.worlds.map(world => `
+                                            <div class="p-3 bg-gray-900 rounded-lg">
+                                                <div class="flex items-center justify-between">
+                                                    <div class="flex-1 min-w-0">
+                                                        <div class="flex items-center gap-2 mb-1">
+                                                            <span class="font-medium text-sm">${world.name}</span>
+                                                            ${world.name === state.config['level-name'] ? '<span class="px-2 py-0.5 text-xs bg-blue-600 rounded">Active</span>' : ''}
+                                                            ${world.isValid ? '<span class="text-xs text-green-500">✓ Valid</span>' : '<span class="text-xs text-red-500">⚠ Invalid</span>'}
+                                                        </div>
+                                                        <div class="text-xs text-gray-500">
+                                                            ${world.size} • ${new Date(world.modified).toLocaleDateString()}
+                                                        </div>
+                                                    </div>
+                                                    <div class="flex gap-1.5 flex-shrink-0">
+                                                        ${world.name !== state.config['level-name'] ? `
+                                                            <button
+                                                                onclick="enableWorld('${world.name}')"
+                                                                class="px-3 py-1.5 text-xs bg-green-600 hover:bg-green-700 rounded-lg whitespace-nowrap">
+                                                                ▶️ Enable
+                                                            </button>
+                                                            <button
+                                                                onclick="deleteWorld('${world.name}')"
+                                                                class="px-2 py-1.5 text-xs bg-red-600 hover:bg-red-700 rounded-lg">
+                                                                🗑️
+                                                            </button>
+                                                        ` : `
+                                                            <span class="px-3 py-1.5 text-xs bg-gray-600 rounded-lg whitespace-nowrap text-gray-400">
+                                                                Active World
+                                                            </span>
+                                                        `}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        `).join('')}
+                                    </div>
+                                `}
+                                `}
+                            </div>
+
+                            <!-- Instructions -->
+                            <div class="bg-gray-800 rounded-lg p-4">
+                                <h3 class="text-base font-semibold mb-2">📖 How to Use Addons</h3>
+                                <div class="text-xs text-gray-400 space-y-2">
+                                    <div>
+                                        <strong class="text-gray-300">1. Upload Addon:</strong> Click "Upload Addon" and select your .mcaddon, .mcpack, .mcworld, or .mctemplate file.
+                                    </div>
+                                    <div>
+                                        <strong class="text-gray-300">2. Enable Pack:</strong> After uploading, click "Enable" on the behavior or resource pack you want to use.
+                                    </div>
+                                    <div>
+                                        <strong class="text-gray-300">3. Restart Server:</strong> Restart the server for changes to take effect.
+                                    </div>
+                                    <div>
+                                        <strong class="text-gray-300">4. Join Server:</strong> When connecting, you'll be prompted to "Download & Join" for resource packs. Behavior packs work automatically.
+                                    </div>
+                                    <div class="mt-2 p-2 bg-blue-900/30 rounded">
+                                        <strong class="text-blue-400">💡 Tip:</strong> To force resource packs on all clients, set <code class="bg-gray-900 px-1 rounded">texturepack-required=true</code> in the Config tab.
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+
+                case 'backups':
+                    return `
+                        <div class="bg-gray-800 rounded-lg p-4">
+                            <div class="flex items-center justify-between mb-3">
+                                <h3 class="text-base font-semibold">💾 Backups</h3>
+                                <button onclick="createBackup()" class="px-3 py-1.5 text-sm bg-green-600 hover:bg-green-700 rounded-lg">
+                                    + Create Backup
+                                </button>
+                            </div>
+                            <div class="space-y-1.5">
+                                ${state.backups.map(backup => `
+                                    <div class="flex items-center justify-between p-3 bg-gray-900 rounded-lg">
+                                        <div>
+                                            <div class="font-medium text-sm">${backup.name}</div>
+                                            <div class="text-xs text-gray-400">${backup.date} • ${backup.size}</div>
+                                        </div>
+                                        <div class="flex gap-1.5">
+                                            <button onclick="restoreBackup('${backup.id}')" class="px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-700 rounded-lg">
+                                                ↩️ Restore
+                                            </button>
+                                            <button onclick="downloadFile('${backup.path}')" class="px-2 py-1 text-sm hover:bg-gray-700 rounded">⬇️</button>
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    `;
+
+                case 'config':
+                    return `
+                        <div class="bg-gray-800 rounded-lg p-4">
+                            <div class="flex items-center justify-between mb-4">
+                                <h3 class="text-base font-semibold">⚙️ Server Configuration</h3>
+                                <button onclick="saveConfig()" class="px-3 py-1.5 text-sm bg-green-600 hover:bg-green-700 rounded-lg">
+                                    💾 Save Config
+                                </button>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                ${Object.entries(state.config).map(([key, value]) => `
+                                    <div>
+                                        <label class="block text-xs font-medium text-gray-400 mb-1.5">
+                                            ${key.replace(/-/g, ' ')}
+                                        </label>
+                                        <input 
+                                            type="text" 
+                                            value="${value}"
+                                            onchange="state.config['${key}'] = this.value"
+                                            class="w-full px-3 py-1.5 text-sm bg-gray-900 border border-gray-700 rounded-lg focus:outline-none focus:border-green-500">
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    `;
+            }
+        }
+
+        function selectServer(id) {
+            state.selectedServer = id;
+            // Reset to dashboard tab when switching servers
+            state.activeTab = 'dashboard';
+            state.forceFullRender = true; // Force full render when switching servers
+            renderSidebar();
+            render(); // Update main content immediately with new server info
+            fetchServerDetails();
+            // Close sidebar on mobile after selecting server
+            if (window.innerWidth <= 768) {
+                const sidebar = document.getElementById('sidebar');
+                const overlay = document.getElementById('sidebarOverlay');
+                if (sidebar && overlay && sidebar.classList.contains('sidebar-open')) {
+                    sidebar.classList.remove('sidebar-open');
+                    overlay.classList.remove('active');
+                }
+            }
+        }
+
+        function switchTab(tab) {
+            state.activeTab = tab;
+            // Update tab button styles
+            updateTabStyles();
+            // Fetch data for the new tab before rendering
+            fetchServerDetails().then(() => {
+                render();
+            });
+            // Close sidebar on mobile after selecting tab
+            if (window.innerWidth <= 768) {
+                const sidebar = document.getElementById('sidebar');
+                const overlay = document.getElementById('sidebarOverlay');
+                if (sidebar && overlay && sidebar.classList.contains('sidebar-open')) {
+                    sidebar.classList.remove('sidebar-open');
+                    overlay.classList.remove('active');
+                }
+            }
+        }
+
+        function updateTabStyles() {
+            const tabButtons = document.querySelectorAll('[onclick^="switchTab"]');
+            tabButtons.forEach(button => {
+                const tabName = button.onclick.toString().match(/switchTab\('([^']+)'\)/)[1];
+                if (tabName === state.activeTab) {
+                    button.classList.add('tab-active');
+                    button.classList.remove('text-gray-400', 'hover:text-gray-200');
+                } else {
+                    button.classList.remove('tab-active');
+                    button.classList.add('text-gray-400', 'hover:text-gray-200');
+                }
+            });
+        }
+
+        function switchAddonTab(tab) {
+            state.activeAddonTab = tab;
+            updateAddonTabStyles();
+            render();
+        }
+
+        function updateAddonTabStyles() {
+            const addonTabButtons = document.querySelectorAll('[onclick^="switchAddonTab"]');
+            addonTabButtons.forEach(button => {
+                const tabName = button.onclick.toString().match(/switchAddonTab\('([^']+)'\)/)[1];
+                if (tabName === state.activeAddonTab) {
+                    button.classList.add('tab-active');
+                    button.classList.remove('text-gray-400', 'hover:text-gray-200');
+                } else {
+                    button.classList.remove('tab-active');
+                    button.classList.add('text-gray-400', 'hover:text-gray-200');
+                }
+            });
+        }
+
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('sidebarOverlay');
+
+            if (sidebar && overlay) {
+                sidebar.classList.toggle('sidebar-open');
+                overlay.classList.toggle('active');
+            }
+        }
+
+        function showLoading() {
+            document.getElementById('loadingOverlay').classList.remove('hidden');
+        }
+
+        function hideLoading() {
+            document.getElementById('loadingOverlay').classList.add('hidden');
+        }
+
+        // Initialize
+        fetchServers();
+
+        // Use requestAnimationFrame for smoother updates
+        function updateLoop() {
+            const now = Date.now();
+            if (now - state.lastUpdate >= state.updateInterval) {
+                state.lastUpdate = now;
+                fetchServerDetails();
+            }
+            requestAnimationFrame(updateLoop);
+        }
+
+        // Start the update loop
+        updateLoop();
+
+        // Initialize tab styles after DOM is ready
+        document.addEventListener('DOMContentLoaded', () => {
+            updateTabStyles();
+            updateAddonTabStyles();
+        });
+    </script>
+</body>
+</html>
