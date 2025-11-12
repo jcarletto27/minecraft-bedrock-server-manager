@@ -45,11 +45,12 @@ The aplication will deploy a minecraft bedrock server using docker itzg/docker-m
 ### Prerequisites
 - Docker installed
 - Node.js 18+
-- Tested only on linux server (Ubuntu & Debian)
+- Tested on Linux (Ubuntu & Debian) 
+- Made compatible with windows (untested, you tell me)
 
 ---
 
-### Installation
+### Linux Installation
 Download the source  code
 
 #### 1. **Install Dependencies**
@@ -81,6 +82,56 @@ sudo chown $USER:$USER /opt/minecraft-servers #change this to your data director
 #### 4. **Start the Application**
 ```bash
 # Start the app (run on PM2)
+npm start
+```
+**Access the application at: `http://localhost:3001`**
+
+---
+
+### Windows Installation
+
+#### Prerequisites for Windows
+- Docker Desktop for Windows installed and running
+- Node.js 18+ installed
+- Enable Docker TCP (recommended) or use named pipe
+
+#### Docker Desktop Configuration
+1. Open Docker Desktop
+2. Go to Settings → General
+3. Enable "Expose daemon on tcp://localhost:2375 without TLS"
+4. Restart Docker Desktop
+
+#### Windows Installation Steps
+
+##### 1. **Install Dependencies**
+```bash
+# Install backend dependencies
+npm install
+```
+
+##### 2. **Configure Environment**
+Edit the `.env` file in the root directory:
+```bash
+# Server Configuration
+PORT=3001
+DATA_DIR=C:\MINECRAFTSERVER\data
+
+# Authentication
+LOGIN_PASSWORD=your_secure_password_here
+MAX_LOGIN_ATTEMPTS=5
+LOGIN_LOCKOUT_MINUTES=5
+```
+
+##### 3. **Create Data Directory**
+Create it manually:
+```bash
+# Create directory for server data (Windows Command Prompt)
+mkdir "C:\MINECRAFTSERVER\data"
+```
+
+##### 4. **Start the Application**
+```bash
+# Start the app
 npm start
 ```
 **Access the application at: `http://localhost:3001`**
@@ -206,18 +257,3 @@ The application includes password protection:
 ![enter image description here](https://github.com/mugh/minecraftbedrockservermanager/blob/main/Screenshot/Screenshot%202025-11-12%20101458.png?raw=true)
 ![enter image description here](https://github.com/mugh/minecraftbedrockservermanager/blob/main/Screenshot/Screenshot%202025-11-12%20101519.png?raw=true)
 ![enter image description here](https://github.com/mugh/minecraftbedrockservermanager/blob/main/Screenshot/Screenshot%202025-11-12%20101527.png?raw=true)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
