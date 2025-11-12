@@ -380,7 +380,7 @@
             serverContextMenuId: null,
             scrollPositions: {},
             lastUpdate: 0,
-            updateInterval: 5000, // 5 seconds
+            updateInterval: 10000, // 10 seconds
             addons: { behaviorPacks: [], resourcePacks: [] },
             worlds: [],
             forceFullRender: false,
@@ -544,6 +544,7 @@
                     if (JSON.stringify(state.players) !== JSON.stringify(players)) {
                         state.players = players;
                         dataChanged = true;
+                        state.forceFullRender = true; // Force full render to update tab labels
                     }
                 }
 
@@ -561,6 +562,7 @@
                 // Only re-render if relevant data changed
                 if (dataChanged) {
                     render();
+                    renderSidebar(); // Update sidebar in case player count changed
                     // Restore scroll positions after render is complete
                     requestAnimationFrame(restoreScrollPositions);
                 }
@@ -633,28 +635,88 @@
         }
 
         async function createServer() {
-            const result = await Swal.fire({
+            const { value: formValues } = await Swal.fire({
                 title: 'Create New Server',
-                input: 'text',
-                inputLabel: 'Enter server name:',
-                inputPlaceholder: 'My Minecraft Server',
+                html: `
+                    <div class="text-left">
+                        <div class="mb-4">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Server Name</label>
+                            <input id="swal-server-name" type="text" placeholder="My Minecraft Server" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 text-white">
+                        </div>
+                        <div class="mb-4">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Minecraft Version</label>
+                            <div class="space-y-2">
+                                <div class="flex gap-2">
+                                    <label class="flex items-center">
+                                        <input type="radio" name="version-type" value="LATEST" checked class="mr-2">
+                                        <span class="text-sm">Latest (Auto-update to newest stable)</span>
+                                    </label>
+                                </div>
+                                <div class="flex gap-2">
+                                    <label class="flex items-center">
+                                        <input type="radio" name="version-type" value="PREVIEW" class="mr-2">
+                                        <span class="text-sm">Preview (Auto-update to newest preview)</span>
+                                    </label>
+                                </div>
+                                <div class="flex gap-2">
+                                    <label class="flex items-center">
+                                        <input type="radio" name="version-type" value="CUSTOM" class="mr-2">
+                                        <span class="text-sm">Custom version:</span>
+                                    </label>
+                                    <input id="swal-custom-version" type="text" placeholder="e.g. 1.20.80" class="flex-1 px-3 py-1 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 text-white text-sm" disabled>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `,
                 showCancelButton: true,
                 confirmButtonColor: '#10b981',
                 cancelButtonColor: '#6b7280',
-                inputValidator: (value) => {
-                    if (!value) {
-                        return 'Server name is required!';
+                confirmButtonText: 'Create Server',
+                didOpen: () => {
+                    // Enable/disable custom version input based on radio selection
+                    document.querySelectorAll('input[name="version-type"]').forEach(radio => {
+                        radio.addEventListener('change', (e) => {
+                            const customInput = document.getElementById('swal-custom-version');
+                            customInput.disabled = e.target.value !== 'CUSTOM';
+                            if (e.target.value === 'CUSTOM') {
+                                customInput.focus();
+                            }
+                        });
+                    });
+                },
+                preConfirm: () => {
+                    const name = document.getElementById('swal-server-name').value.trim();
+                    const versionType = document.querySelector('input[name="version-type"]:checked').value;
+                    let version;
+
+                    if (versionType === 'CUSTOM') {
+                        version = document.getElementById('swal-custom-version').value.trim();
+                        if (!version) {
+                            Swal.showValidationMessage('Custom version is required!');
+                            return false;
+                        }
+                    } else {
+                        version = versionType;
                     }
+
+                    if (!name) {
+                        Swal.showValidationMessage('Server name is required!');
+                        return false;
+                    }
+                    return { name, version };
                 }
             });
-            if (!result.isConfirmed || !result.value) return;
-            const name = result.value;
+
+            if (!formValues) return;
+            const { name, version } = formValues;
+
             try {
                 showLoading();
                 await fetch(`${API_BASE}/servers`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name })
+                    body: JSON.stringify({ name, version })
                 });
                 await fetchServers();
                 hideLoading();
@@ -663,6 +725,116 @@
                 Swal.fire({
                     title: 'Error',
                     text: 'Failed to create server: ' + err.message,
+                    icon: 'error',
+                    confirmButtonColor: '#10b981'
+                });
+            }
+        }
+
+        async function editServerVersion() {
+            const currentServer = state.servers.find(s => s.id === state.selectedServer);
+            if (!currentServer) return;
+
+            const currentVersion = currentServer.version || 'LATEST';
+            const isCustom = !['LATEST', 'PREVIEW'].includes(currentVersion);
+
+            const { value: version } = await Swal.fire({
+                title: 'Edit Server Version',
+                html: `
+                    <div class="text-left">
+                        <div class="mb-4">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Current Version: <span class="text-green-400">${currentVersion}</span></label>
+                            <div class="space-y-2">
+                                <div class="flex gap-2">
+                                    <label class="flex items-center">
+                                        <input type="radio" name="edit-version-type" value="LATEST" ${currentVersion === 'LATEST' ? 'checked' : ''} class="mr-2">
+                                        <span class="text-sm">Latest (Auto-update to newest stable)</span>
+                                    </label>
+                                </div>
+                                <div class="flex gap-2">
+                                    <label class="flex items-center">
+                                        <input type="radio" name="edit-version-type" value="PREVIEW" ${currentVersion === 'PREVIEW' ? 'checked' : ''} class="mr-2">
+                                        <span class="text-sm">Preview (Auto-update to newest preview)</span>
+                                    </label>
+                                </div>
+                                <div class="flex gap-2">
+                                    <label class="flex items-center">
+                                        <input type="radio" name="edit-version-type" value="CUSTOM" ${isCustom ? 'checked' : ''} class="mr-2">
+                                        <span class="text-sm">Custom version:</span>
+                                    </label>
+                                    <input id="swal-edit-custom-version" type="text" value="${isCustom ? currentVersion : ''}" placeholder="e.g. 1.20.80" class="flex-1 px-3 py-1 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 text-white text-sm" ${isCustom ? '' : 'disabled'}>
+                                </div>
+                            </div>
+                            <div class="text-xs text-yellow-400 mt-2">
+                                ⚠️ Changing version will restart the server and may take several minutes to download the new version.
+                            </div>
+                        </div>
+                    </div>
+                `,
+                showCancelButton: true,
+                confirmButtonColor: '#f59e0b',
+                cancelButtonColor: '#6b7280',
+                confirmButtonText: 'Update Version',
+                didOpen: () => {
+                    // Enable/disable custom version input based on radio selection
+                    document.querySelectorAll('input[name="edit-version-type"]').forEach(radio => {
+                        radio.addEventListener('change', (e) => {
+                            const customInput = document.getElementById('swal-edit-custom-version');
+                            customInput.disabled = e.target.value !== 'CUSTOM';
+                            if (e.target.value === 'CUSTOM') {
+                                customInput.focus();
+                            }
+                        });
+                    });
+                },
+                preConfirm: () => {
+                    const versionType = document.querySelector('input[name="edit-version-type"]:checked').value;
+                    let version;
+
+                    if (versionType === 'CUSTOM') {
+                        version = document.getElementById('swal-edit-custom-version').value.trim();
+                        if (!version) {
+                            Swal.showValidationMessage('Custom version is required!');
+                            return false;
+                        }
+                    } else {
+                        version = versionType;
+                    }
+
+                    return version;
+                }
+            });
+
+            if (!version) return;
+
+            try {
+                showLoading();
+                const response = await fetch(`${API_BASE}/servers/${state.selectedServer}/version`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ version })
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    await fetchServers();
+                    hideLoading();
+                    Swal.fire({
+                        title: 'Success',
+                        html: `✅ Server version updated to ${version}!<br><br>${result.restarted ? 'Server has been restarted.' : 'Server was stopped and will need to be started manually.'}`,
+                        icon: 'success',
+                        confirmButtonColor: '#10b981'
+                    });
+                } else {
+                    hideLoading();
+                    throw new Error(result.error || 'Failed to update version');
+                }
+            } catch (err) {
+                hideLoading();
+                Swal.fire({
+                    title: 'Error',
+                    text: 'Failed to update server version: ' + err.message,
                     icon: 'error',
                     confirmButtonColor: '#10b981'
                 });
@@ -1698,7 +1870,7 @@
                                     <span class="status-dot ${server.status === 'running' ? 'bg-green-500' : 'bg-red-500'}"></span>
                                 </div>
                                 <div class="text-xs mt-0.5 opacity-75">
-                                    ${server.status} • ${state.selectedServer === server.id ? state.players.length : 0} players
+                                    ${server.status}
                                 </div>
                             </button>
                         `).join('')}
@@ -1769,7 +1941,7 @@
                                         <span class="status-dot ${server.status === 'running' ? 'bg-green-500' : 'bg-red-500'}"></span>
                                     </div>
                                     <div class="text-xs mt-0.5 opacity-75">
-                                        ${server.status} • ${state.selectedServer === server.id ? state.players.length : 0} players
+                                        ${server.status}
                                     </div>
                                 </button>
                             `).join('')}
@@ -1783,9 +1955,13 @@
                             <div class="bg-gray-800 border-b border-gray-700 px-4 py-2.5">
                                 <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
                                     <div class="flex-1 min-w-0">
-                                        <h2 class="text-base md:text-lg font-bold truncate">${currentServer.name}</h2>
+                                        <div class="flex items-center gap-2 mb-1">
+                                            <h2 class="text-base md:text-lg font-bold truncate">${currentServer.name}</h2>
+                                            <span class="px-2 py-0.5 text-xs bg-blue-600 rounded-lg">v${currentServer.version || 'LATEST'}</span>
+                                            <button onclick="editServerVersion()" class="px-2 py-0.5 text-xs bg-gray-600 hover:bg-gray-500 rounded" title="Edit Version">✏️</button>
+                                        </div>
                                         <div class="text-xs text-gray-400 mt-0.5 truncate">
-                                            ${currentServer.status} • ${state.players.length}/${currentServer.maxPlayers || 10} players • ${currentServer.worldSize}
+                                            ${currentServer.status} • ${currentServer.worldSize}
                                         </div>
                                     </div>
                                     <div class="flex gap-1.5 flex-wrap">
@@ -1810,7 +1986,7 @@
 
                             <!-- Tabs -->
                             <div class="bg-gray-800 border-b border-gray-700 px-4 flex gap-2 overflow-x-auto whitespace-nowrap">
-                                ${['dashboard', 'console', 'players', 'files', 'addons', 'backups', 'config'].map(tab => `
+                                ${['dashboard', 'console', 'files', 'addons', 'backups', 'config'].map(tab => `
                                     <button
                                         onclick="switchTab('${tab}')"
                                         class="px-3 py-2 text-xs md:text-sm capitalize flex-shrink-0 ${state.activeTab === tab ? 'tab-active' : 'text-gray-400 hover:text-gray-200'}">
@@ -1833,8 +2009,8 @@
             switch(state.activeTab) {
                 case 'dashboard':
                     return `
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div class="bg-gray-800 rounded-lg p-4">
+                        <div class="grid grid-cols-1 md:grid-cols-1">
+                            <div class="bg-gray-800 rounded-lg p-4 mb-2">
                                 <h3 class="text-base font-semibold mb-3">📊 Server Stats</h3>
                                 <div class="space-y-2">
                                     <div class="flex justify-between text-sm">
@@ -1852,26 +2028,60 @@
                                 </div>
                             </div>
                             
-                            <div class="bg-gray-800 rounded-lg p-4">
-                                <h3 class="text-base font-semibold mb-3">⚡ Quick Actions</h3>
-                                <div class="space-y-1.5">
-                                    <button onclick="createBackup()" class="w-full p-2 text-sm bg-blue-600 hover:bg-blue-700 rounded-lg text-left">
-                                        💾 Create Backup
-                                    </button>
-                                    <button onclick="switchTab('files')" class="w-full p-2 text-sm bg-purple-600 hover:bg-purple-700 rounded-lg text-left">
-                                        📁 Browse Files
-                                    </button>
-                                    <button onclick="switchTab('config')" class="w-full p-2 text-sm bg-orange-600 hover:bg-orange-700 rounded-lg text-left">
-                                        ⚙️ Edit Config
-                                    </button>
-                                </div>
-                            </div>
 
                             <div class="bg-gray-800 rounded-lg p-4 md:col-span-2">
-                                <h3 class="text-base font-semibold mb-3">📜 Recent Logs</h3>
-                                <div class="bg-gray-900 rounded p-3 h-48 overflow-y-auto log-container">
-                                    ${state.logs.slice(-20).map(log => `<div class="text-gray-400 mb-0.5 text-xs">${log}</div>`).join('')}
-                                </div>
+                                <h3 class="text-base font-semibold mb-3">👥 Online Players (${state.players.length})</h3>
+                                ${state.players.length === 0 ? `
+                                    <div class="text-center py-8 text-gray-500">
+                                        <div class="text-3xl mb-2">👤</div>
+                                        <div class="text-sm">No players online</div>
+                                    </div>
+                                ` : `
+                                    <div class="space-y-1.5">
+                                        ${state.players.map(player => `
+                                            <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between p-3 bg-gray-900 rounded-lg gap-2">
+                                                <div class="flex items-center gap-2">
+                                                    <div class="w-8 h-8 bg-green-600 rounded-lg flex items-center justify-center text-lg flex-shrink-0">
+                                                        👤
+                                                    </div>
+                                                    <div>
+                                                        <div class="font-medium text-sm flex items-center gap-2">
+                                                            ${player.name}
+                                                            ${player.isOperator ? '<span class="px-2 py-0.5 text-xs bg-yellow-600 rounded">OP</span>' : ''}
+                                                        </div>
+                                                        <div class="text-xs text-gray-400">Connected</div>
+                                                    </div>
+                                                </div>
+                                                <div class="flex gap-1.5 flex-wrap w-full sm:w-auto">
+                                                    <button
+                                                        onclick="opPlayer('${player.name}')"
+                                                        class="px-2 py-1 text-xs bg-blue-600 hover:bg-blue-700 rounded-lg flex-1 sm:flex-initial"
+                                                        title="Make Operator">
+                                                        👑 OP
+                                                    </button>
+                                                    <button
+                                                        onclick="deopPlayer('${player.name}')"
+                                                        class="px-2 py-1 text-xs bg-gray-600 hover:bg-gray-700 rounded-lg flex-1 sm:flex-initial"
+                                                        title="Remove Operator">
+                                                        ⬇️ Deop
+                                                    </button>
+                                                    <button
+                                                        onclick="kickPlayer('${player.name}')"
+                                                        class="px-2 py-1 text-xs bg-yellow-600 hover:bg-yellow-700 rounded-lg flex-1 sm:flex-initial"
+                                                        title="Kick Player">
+                                                        👢 Kick
+                                                    </button>
+                                                    <button
+                                                        onclick="banPlayer('${player.name}')"
+                                                        class="px-2 py-1 text-xs bg-red-600 hover:bg-red-700 rounded-lg flex-1 sm:flex-initial"
+                                                        title="Ban Player">
+                                                        🚫 Ban
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        `).join('')}
+                                    </div>
+                                `}
                             </div>
                         </div>
                     `;
@@ -1918,7 +2128,10 @@
                                                     👤
                                                 </div>
                                                 <div>
-                                                    <div class="font-medium text-sm">${player.name}</div>
+                                                    <div class="font-medium text-sm flex items-center gap-2">
+                                                        ${player.name}
+                                                        ${player.isOperator ? '<span class="px-2 py-0.5 text-xs bg-yellow-600 rounded">OP</span>' : ''}
+                                                    </div>
                                                     <div class="text-xs text-gray-400">Connected</div>
                                                 </div>
                                             </div>

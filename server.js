@@ -53,14 +53,18 @@ app.get('/api/servers', async (req, res) => {
       const serverId = c.Labels['server-id'];
       const serverPath = getServerPath(serverId);
 
-      // Get server name from metadata or fallback to label
+      // Get server name and version from metadata or fallback to label
       let serverName = c.Labels['server-name'] || serverId;
+      let serverVersion = 'LATEST';
       try {
         const metadataPath = path.join(serverPath, 'metadata.json');
         if (await fs.pathExists(metadataPath)) {
           const metadata = await fs.readJson(metadataPath);
           if (metadata.name) {
             serverName = metadata.name;
+          }
+          if (metadata.version) {
+            serverVersion = metadata.version;
           }
         }
       } catch (err) {
@@ -77,12 +81,71 @@ app.get('/api/servers', async (req, res) => {
         }
       } catch (err) {}
 
+      // Get player count
+      let playerCount = 0;
+      if (c.State === 'running') {
+        try {
+          // Send list command
+          const exec = await container.exec({
+            Cmd: ['send-command', 'list'],
+            AttachStdout: true,
+            AttachStderr: true
+          });
+          await exec.start();
+          // Wait a bit
+          await new Promise(resolve => setTimeout(resolve, 500));
+          // Read logs
+          const logs = await container.logs({
+            stdout: true,
+            stderr: true,
+            tail: 20
+          });
+          const logText = logs.toString();
+          const lines = logText.trim().split('\n');
+          // Find the last "players online:" line
+          let lastIndex = -1;
+          for (let i = 0; i < lines.length; i++) {
+            if (lines[i].includes('players online:')) {
+              lastIndex = i;
+            }
+          }
+          if (lastIndex >= 0) {
+            // Count the players
+            for (let i = lastIndex + 1; i < lines.length; i++) {
+              const line = lines[i].trim();
+              if (line.startsWith('[') || line.startsWith('>') || line.includes('AutoCompaction') || line === '') {
+                break;
+              }
+              if (line) {
+                playerCount++;
+              }
+            }
+          }
+        } catch (err) {
+          // Ignore errors
+        }
+      }
+
+      // Get max players from config
+      let maxPlayers = 10;
+      try {
+        const configPath = path.join(serverPath, 'server.properties');
+        if (await fs.pathExists(configPath)) {
+          const content = await fs.readFile(configPath, 'utf8');
+          const maxPlayersMatch = content.match(/max-players=(\d+)/);
+          if (maxPlayersMatch) {
+            maxPlayers = parseInt(maxPlayersMatch[1]);
+          }
+        }
+      } catch (err) {}
+
       return {
         id: serverId,
         name: serverName,
+        version: serverVersion,
         status: c.State,
-        players: 0, // Would need to parse logs or use RCON
-        maxPlayers: 10,
+        players: playerCount,
+        maxPlayers: maxPlayers,
         uptime: info.State.Running ? formatUptime(info.State.StartedAt) : '0h 0m',
         memory: formatBytes(info.HostConfig.Memory || 0),
         cpu: '0%',
@@ -102,7 +165,7 @@ app.get('/api/servers', async (req, res) => {
 // POST /api/servers - Create new server
 app.post('/api/servers', async (req, res) => {
   try {
-    const { name } = req.body;
+    const { name, version = 'LATEST' } = req.body;
     const serverId = `bedrock-${Date.now()}`;
     const serverPath = getServerPath(serverId);
 
@@ -113,6 +176,7 @@ app.post('/api/servers', async (req, res) => {
     const metadataPath = path.join(serverPath, 'metadata.json');
     const metadata = {
       name: name,
+      version: version,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -132,6 +196,7 @@ app.post('/api/servers', async (req, res) => {
       },
       Env: [
         'EULA=TRUE',
+        'VERSION=' + version,
         'GAMEMODE=survival',
         'DIFFICULTY=normal',
         'SERVER_NAME=' + name
@@ -154,6 +219,7 @@ app.post('/api/servers', async (req, res) => {
     res.json({
       id: serverId,
       name,
+      version,
       gamePort,
       rconPort,
       message: 'Server created successfully'
@@ -239,6 +305,97 @@ app.post('/api/servers/:id/rename', async (req, res) => {
     });
   } catch (err) {
     console.error('Error renaming server:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/servers/:id/version - Update server version
+app.post('/api/servers/:id/version', async (req, res) => {
+  try {
+    const { version } = req.body;
+    if (!version || !version.trim()) {
+      return res.status(400).json({ error: 'Version is required' });
+    }
+
+    const serverId = req.params.id;
+    const serverPath = getServerPath(serverId);
+    const metadataPath = path.join(serverPath, 'metadata.json');
+
+    // Ensure server directory exists
+    if (!await fs.pathExists(serverPath)) {
+      return res.status(404).json({ error: 'Server not found' });
+    }
+
+    // Get current container info
+    const container = await getContainer(serverId);
+    if (!container) {
+      return res.status(404).json({ error: 'Container not found' });
+    }
+
+    const containerInfo = await container.inspect();
+    const wasRunning = containerInfo.State.Running;
+
+    // Stop container if running
+    if (wasRunning) {
+      await container.stop();
+    }
+
+    // Remove container
+    await container.remove();
+
+    // Update metadata
+    let metadata = {};
+    if (await fs.pathExists(metadataPath)) {
+      metadata = await fs.readJson(metadataPath);
+    }
+    metadata.version = version.trim();
+    metadata.updatedAt = new Date().toISOString();
+    await fs.writeJson(metadataPath, metadata, { spaces: 2 });
+
+    // Find available ports (reuse existing if possible)
+    const gamePort = containerInfo.HostConfig.PortBindings['19132/udp']?.[0]?.HostPort || await findAvailablePort(19132);
+    const rconPort = containerInfo.HostConfig.PortBindings['19133/tcp']?.[0]?.HostPort || await findAvailablePort(25575);
+
+    // Create new container with updated version
+    const newContainer = await docker.createContainer({
+      Image: BEDROCK_IMAGE,
+      name: serverId,
+      Labels: {
+        'server-id': serverId,
+        'server-name': metadata.name
+      },
+      Env: [
+        'EULA=TRUE',
+        'VERSION=' + version.trim(),
+        'GAMEMODE=survival',
+        'DIFFICULTY=normal',
+        'SERVER_NAME=' + metadata.name
+      ],
+      HostConfig: {
+        Binds: [`${serverPath}:/data`],
+        PortBindings: {
+          '19132/udp': [{ HostPort: gamePort.toString() }],
+          '19133/tcp': [{ HostPort: rconPort.toString() }]
+        },
+        RestartPolicy: {
+          Name: 'unless-stopped'
+        },
+        Memory: containerInfo.HostConfig.Memory || 2 * 1024 * 1024 * 1024 // 2GB
+      }
+    });
+
+    // Start container if it was running before
+    if (wasRunning) {
+      await newContainer.start();
+    }
+
+    res.json({
+      message: 'Server version updated successfully',
+      version: version.trim(),
+      restarted: wasRunning
+    });
+  } catch (err) {
+    console.error('Error updating server version:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -341,36 +498,137 @@ app.post('/api/servers/:id/command', async (req, res) => {
   }
 });
 
-// GET /api/servers/:id/players - Get player list from logs
+// GET /api/servers/:id/players - Get player list using list command and logs
 app.get('/api/servers/:id/players', async (req, res) => {
   try {
     const container = await getContainer(req.params.id);
     if (!container) return res.status(404).json({ error: 'Server not found' });
-    
-    const logs = await container.logs({
-      stdout: true,
-      stderr: true,
-      tail: 500
-    });
-    
+
+    // Check if container is running
+    const containerInfo = await container.inspect();
+    if (containerInfo.State.Status !== 'running') {
+      return res.json([]);
+    }
+
+    let logs;
+    try {
+      // Send list command
+      const exec = await container.exec({
+        Cmd: ['send-command', 'list'],
+        AttachStdout: true,
+        AttachStderr: true
+      });
+
+      await exec.start();
+
+      // Wait a bit for the command to execute
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // Read recent logs to get the list output
+      logs = await container.logs({
+        stdout: true,
+        stderr: true,
+        tail: 20
+      });
+    } catch (err) {
+      // If container operations fail (e.g., container stopped), return empty list
+      return res.json([]);
+    }
+
     const logText = logs.toString();
-    const players = new Set();
-    
-    // Parse player connections from logs
-    const playerRegex = /Player connected: (.+?),/g;
-    let match;
-    while ((match = playerRegex.exec(logText)) !== null) {
-      players.add(match[1]);
+
+    const lines = logText.trim().split('\n');
+    const players = [];
+
+    // Find the LAST line with player list from the command output (most recent)
+    let lastIndex = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].includes('players online:')) {
+        lastIndex = i;
+      }
     }
-    
-    // Parse player disconnections to remove them
-    const disconnectRegex = /Player disconnected: (.+?),/g;
-    while ((match = disconnectRegex.exec(logText)) !== null) {
-      players.delete(match[1]);
+
+    if (lastIndex >= 0) {
+      // Parse players from the last list output
+      for (let i = lastIndex + 1; i < lines.length; i++) {
+        const line = lines[i].trim();
+        // Stop if it's a log line (starts with [ or >) or other messages
+        if (line.startsWith('[') || line.startsWith('>') || line.includes('AutoCompaction') || line === '') {
+          break;
+        }
+        if (line) {
+          // Split by comma and clean each name
+          const names = line.split(',').map(n => n.replace(/[^\x20-\x7E]/g, '').trim()).filter(n => n);
+          players.push(...names.map(name => ({ name })));
+        }
+      }
     }
-    
-    res.json(Array.from(players).map(name => ({ name })));
+
+    // Load player cache
+    let playerCache = {};
+    const cachePath = path.join(getServerPath(req.params.id), 'player_cache.json');
+    try {
+      if (await fs.pathExists(cachePath)) {
+        const cacheContent = await fs.readFile(cachePath, 'utf8');
+        playerCache = JSON.parse(cacheContent);
+      }
+    } catch (err) {
+      // Ignore
+    }
+
+    // Get XUID for each player from cache or external API
+    for (const player of players) {
+      if (playerCache[player.name]) {
+        player.xuid = playerCache[player.name];
+      } else {
+        try {
+          const response = await fetch(`https://mcprofile.io/api/v1/bedrock/gamertag/${encodeURIComponent(player.name)}`);
+          if (response.ok) {
+            const data = await response.json();
+            player.xuid = data.xuid || null;
+            playerCache[player.name] = player.xuid;
+          } else {
+            player.xuid = null;
+          }
+        } catch (err) {
+          player.xuid = null;
+        }
+        // Add small delay to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+
+    // Save updated cache
+    try {
+      await fs.writeJson(cachePath, playerCache, { spaces: 2 });
+    } catch (err) {
+      // Ignore
+    }
+
+    // Check operators from permissions.json
+    let permissions = [];
+    try {
+      const permissionsPath = path.join(getServerPath(req.params.id), 'permissions.json');
+      if (await fs.pathExists(permissionsPath)) {
+        const permissionsContent = await fs.readFile(permissionsPath, 'utf8');
+        permissions = JSON.parse(permissionsContent);
+      }
+    } catch (err) {
+      // Ignore
+    }
+
+    // Mark operators
+    const operatorXuids = permissions.filter(p => p.permission === 'operator').map(p => p.xuid);
+    players.forEach(player => {
+      player.isOperator = player.xuid && operatorXuids.includes(player.xuid);
+    });
+
+    // Update the player count in the servers list for the sidebar
+    // But since we can't modify state here, the frontend will handle it
+
+    res.json(players);
   } catch (err) {
+    console.error('Error getting players:', err);
     res.status(500).json({ error: err.message });
   }
 });
