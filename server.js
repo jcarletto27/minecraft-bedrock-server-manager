@@ -1772,7 +1772,7 @@ app.post('/api/servers/:id/addons/upload', addonUpload.single('addon'), async (r
               try {
                 const manifest = await parseManifestJson(manifestPath);
                 const modules = manifest.modules || [];
-                const isBehavior = modules.some(m => m.type === 'data' || m.type === 'javascript');
+                const isBehavior = modules.some(m => m.type === 'data' || m.type === 'javascript' || m.type === 'script');
                 const targetPath = isBehavior ? paths.behaviorPacks : paths.resourcePacks;
                 const suffix = isBehavior ? 'bp' : 'rp';
                 const folderName = await generateUniquePackFolderName(targetPath, originalName, suffix);
