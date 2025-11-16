@@ -255,17 +255,6 @@ app.post('/api/servers', async (req, res) => {
 
     await container.start();
 
-    // Update metadata with actual container name after creation
-    const containerInfo = await container.inspect();
-    const actualContainerName = containerInfo.Name ? containerInfo.Name.replace('/', '') : serverId;
-    const metadataPath3 = path.join(serverPath, 'metadata.json');
-    if (await fs.pathExists(metadataPath3)) {
-      const metadata = await fs.readJson(metadataPath3);
-      metadata.containerName = actualContainerName;
-      metadata.updatedAt = new Date().toISOString();
-      await fs.writeJson(metadataPath3, metadata, { spaces: 2 });
-    }
-
     // Broadcast server update
     setTimeout(() => broadcastServerUpdate(serverId), 2000); // Wait for container to fully start
 
@@ -1521,6 +1510,40 @@ async function parseManifestJson(manifestPath) {
   }
 }
 
+// Helper: Generate safe folder name from addon filename
+function generatePackFolderName(addonName, suffix) {
+  // Remove extension from addon filename
+  let baseName = addonName.replace(/\.[^/.]+$/, '');
+
+  // Sanitize name: replace spaces and special chars with underscores
+  baseName = baseName
+    .replace(/[^a-zA-Z0-9\s\-_]/g, '') // Remove special chars except space, dash, underscore
+    .replace(/\s+/g, '_') // Replace spaces with underscores
+    .replace(/_+/g, '_') // Replace multiple underscores with single
+    .replace(/^_+|_+$/g, ''); // Trim underscores from start/end
+
+  // Ensure baseName is not empty
+  if (!baseName) {
+    baseName = 'unknown_addon';
+  }
+
+  return `${baseName}_${suffix}`;
+}
+
+// Helper: Generate unique folder name with conflict resolution
+async function generateUniquePackFolderName(targetDir, manifest, suffix) {
+  let baseName = generatePackFolderName(manifest, suffix);
+  let finalName = baseName;
+  let counter = 1;
+
+  while (await fs.pathExists(path.join(targetDir, finalName))) {
+    finalName = `${baseName}_${counter}`;
+    counter++;
+  }
+
+  return finalName;
+}
+
 // GET /api/servers/:id/addons - List all addons
 app.get('/api/servers/:id/addons', async (req, res) => {
   try {
@@ -1729,7 +1752,8 @@ app.post('/api/servers/:id/addons/upload', addonUpload.single('addon'), async (r
             const behaviorItems = await fs.readdir(itemPath);
             for (const pack of behaviorItems) {
               const sourcePath = path.join(itemPath, pack);
-              const destPath = path.join(paths.behaviorPacks, pack);
+              const folderName = await generateUniquePackFolderName(paths.behaviorPacks, originalName, 'bp');
+              const destPath = path.join(paths.behaviorPacks, folderName);
               await fs.copy(sourcePath, destPath, { overwrite: true });
               processedItems++;
             }
@@ -1737,7 +1761,8 @@ app.post('/api/servers/:id/addons/upload', addonUpload.single('addon'), async (r
             const resourceItems = await fs.readdir(itemPath);
             for (const pack of resourceItems) {
               const sourcePath = path.join(itemPath, pack);
-              const destPath = path.join(paths.resourcePacks, pack);
+              const folderName = await generateUniquePackFolderName(paths.resourcePacks, originalName, 'rp');
+              const destPath = path.join(paths.resourcePacks, folderName);
               await fs.copy(sourcePath, destPath, { overwrite: true });
               processedItems++;
             }
@@ -1749,10 +1774,15 @@ app.post('/api/servers/:id/addons/upload', addonUpload.single('addon'), async (r
                 const modules = manifest.modules || [];
                 const isBehavior = modules.some(m => m.type === 'data' || m.type === 'javascript');
                 const targetPath = isBehavior ? paths.behaviorPacks : paths.resourcePacks;
-                await fs.copy(itemPath, path.join(targetPath, item), { overwrite: true });
+                const suffix = isBehavior ? 'bp' : 'rp';
+                const folderName = await generateUniquePackFolderName(targetPath, originalName, suffix);
+                const destPath = path.join(targetPath, folderName);
+                await fs.copy(itemPath, destPath, { overwrite: true });
                 processedItems++;
               } catch (err) {
-                await fs.copy(itemPath, path.join(paths.resourcePacks, item), { overwrite: true });
+                const folderName = await generateUniquePackFolderName(paths.resourcePacks, originalName, 'rp');
+                const destPath = path.join(paths.resourcePacks, folderName);
+                await fs.copy(itemPath, destPath, { overwrite: true });
                 processedItems++;
               }
             }
@@ -1762,11 +1792,26 @@ app.post('/api/servers/:id/addons/upload', addonUpload.single('addon'), async (r
 
       await fs.remove(tempExtractPath);
     } else if (ext === '.mcpack') {
-      const packName = path.basename(originalName, ext);
-      const extractPath = path.join(targetDir, packName);
+      const baseName = path.basename(originalName, ext);
+      const tempExtractPath = path.join('./temp', `extract-${Date.now()}`);
+      await fs.ensureDir(tempExtractPath);
+
       await fs.createReadStream(req.file.path)
-        .pipe(unzipper.Extract({ path: extractPath }))
+        .pipe(unzipper.Extract({ path: tempExtractPath }))
         .promise();
+
+      const extractedItems = await fs.readdir(tempExtractPath);
+      for (const item of extractedItems) {
+        const itemPath = path.join(tempExtractPath, item);
+        const stats = await fs.stat(itemPath);
+        if (stats.isDirectory()) {
+          const folderName = await generateUniquePackFolderName(targetDir, originalName, 'rp');
+          const destPath = path.join(targetDir, folderName);
+          await fs.copy(itemPath, destPath, { overwrite: true });
+        }
+      }
+
+      await fs.remove(tempExtractPath);
     } else if (ext === '.mcworld' || ext === '.mctemplate') {
       const worldName = path.basename(originalName, ext);
       const extractPath = path.join(targetDir, worldName);
