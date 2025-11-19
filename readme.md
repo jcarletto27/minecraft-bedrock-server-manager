@@ -167,6 +167,58 @@ npm start
 
 ---
 
+### Docker Deployment
+
+#### Prerequisites
+- Docker installed
+- Docker Compose installed
+
+See project on https://github.com/mugh/minecraft-bedrock-server-manager
+
+### Docker Compose Example
+---
+```bash
+services:
+  server-manager:
+    image: mugh/bdsmanagerforitzg:latest
+    ports:
+      - "3001:3001"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - minecraft-data:/app/minecraft-data
+    environment:
+      - PORT=3001
+      - LOGIN_PASSWORD=minecraft123
+      - MAX_LOGIN_ATTEMPTS=5
+      - LOGIN_LOCKOUT_MINUTES=5
+      #- DOCKER_HOST=tcp://host.docker.internal:2375 for windows only
+    networks:
+      - minecraft-network
+
+volumes:
+  minecraft-data:
+
+networks:
+  minecraft-network:
+    driver: bridge
+```
+
+### Access the application
+   The application will be available at `http://localhost:3001`
+   Default login password: `minecraft123` (change in environtment variables)
+
+#### Environment Variables
+You can customize the deployment by editing the `docker-compose.yml` file:
+- `LOGIN_PASSWORD`: Set your desired password
+- `PORT`: Change the port if needed (default: 3001)
+- `DATA_DIR`: Already set to `/app/minecraft-data` inside container
+
+#### Volumes
+- `minecraft-data`: Persistent storage for Minecraft server data
+- `/var/run/docker.sock`: Allows the app to manage Docker containers
+
+---
+
 ## [SUPPORT ME](https://sociabuzz.com/mughniy/donate)
 
 
@@ -176,6 +228,7 @@ npm start
 ![enter image description here](https://github.com/mugh/minecraftbedrockservermanager/blob/main/Screenshot/sc2.png?raw=true)
 ![enter image description here](https://github.com/mugh/minecraftbedrockservermanager/blob/main/Screenshot/sc3.png?raw=true)
 ![enter image description here](https://github.com/mugh/minecraftbedrockservermanager/blob/main/Screenshot/sc4.png?raw=true)
+
 
 
 

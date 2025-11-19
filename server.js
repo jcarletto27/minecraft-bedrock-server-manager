@@ -73,6 +73,51 @@ const BEDROCK_IMAGE = 'itzg/minecraft-bedrock-server';
 // Helper: Get server data path
 const getServerPath = (serverId) => path.join(DATA_DIR, serverId);
 
+// Helper: Get host data path by inspecting container mounts
+const getHostDataPath = async () => {
+  try {
+    console.log('Searching for container with /app/minecraft-data mount...');
+    // List all containers and find the one with /app/minecraft-data mount
+    const containers = await docker.listContainers({ all: true });
+    console.log(`Found ${containers.length} containers`);
+
+    let minecraftMount = null;
+
+    for (const c of containers) {
+      try {
+        console.log(`Inspecting container: ${c.Names[0]} (${c.Id.substring(0,12)})`);
+        const container = docker.getContainer(c.Id);
+        const containerInfo = await container.inspect();
+
+        console.log(`Container mounts:`, containerInfo.Mounts);
+
+        // Find the mount with target /app/minecraft-data
+        const mount = containerInfo.Mounts?.find(m => m.Destination === '/app/minecraft-data');
+        if (mount) {
+          minecraftMount = mount;
+          console.log('Found container with minecraft-data mount:', c.Names[0], mount);
+          break;
+        }
+      } catch (err) {
+        console.log(`Failed to inspect container ${c.Names[0]}:`, err.message);
+        continue;
+      }
+    }
+
+    if (!minecraftMount) {
+      throw new Error('No container found with /app/minecraft-data mount');
+    }
+
+    console.log('Using mount source:', minecraftMount.Source);
+    return minecraftMount.Source;
+  } catch (err) {
+    console.error('Failed to get host data path from container mounts:', err);
+    console.log('Falling back to DATA_DIR:', DATA_DIR);
+    // For now, still fallback but log it clearly
+    return DATA_DIR;
+  }
+};
+
 // Helper: Get container by server ID
 const getContainer = async (serverId) => {
   const containers = await docker.listContainers({ all: true });
@@ -211,6 +256,8 @@ app.post('/api/servers', async (req, res) => {
     const { name, version = 'LATEST' } = req.body;
     const serverId = `bedrock-${Date.now()}`;
     const serverPath = getServerPath(serverId);
+    const hostDataPath = await getHostDataPath();
+    const hostServerPath = path.join(hostDataPath, serverId);
 
     // Create server directory
     await fs.ensureDir(serverPath);
@@ -243,7 +290,7 @@ app.post('/api/servers', async (req, res) => {
         'SERVER_NAME=' + name
       ],
       HostConfig: {
-        Binds: [`${serverPath}:/data`],
+        Binds: [`${hostServerPath}:/data`],
         PortBindings: {
           '19132/udp': [{ HostPort: gamePort.toString() }]
         },
@@ -318,6 +365,8 @@ app.post('/api/servers/:id/start', async (req, res) => {
         // Create new container with updated port
         const serverId = req.params.id;
         const serverPath = getServerPath(serverId);
+        const hostDataPath = await getHostDataPath();
+        const hostServerPath = path.join(hostDataPath, serverId);
 
         // Read metadata for server info
         const metadataPath = path.join(serverPath, 'metadata.json');
@@ -342,7 +391,7 @@ app.post('/api/servers/:id/start', async (req, res) => {
             'SERVER_NAME=' + (metadata.name || serverId)
           ],
           HostConfig: {
-            Binds: [`${serverPath}:/data`],
+            Binds: [`${hostServerPath}:/data`],
             PortBindings: {
               '19132/udp': [{ HostPort: newGamePort.toString() }]
             },
@@ -469,6 +518,9 @@ app.post('/api/servers/:id/rename', async (req, res) => {
     // Get memory from metadata
     let memory = metadata.memory || 2 * 1024 * 1024 * 1024; // default 2GB
 
+    const hostDataPath = await getHostDataPath();
+    const hostServerPath = path.join(hostDataPath, serverId);
+
     // Create new container with updated server name
     const newContainer = await docker.createContainer({
       Image: BEDROCK_IMAGE,
@@ -483,7 +535,7 @@ app.post('/api/servers/:id/rename', async (req, res) => {
         'SERVER_NAME=' + name.trim()
       ],
       HostConfig: {
-        Binds: [`${serverPath}:/data`],
+        Binds: [`${hostServerPath}:/data`],
         PortBindings: {
           '19132/udp': [{ HostPort: gamePort.toString() }]
         },
@@ -562,6 +614,9 @@ app.post('/api/servers/:id/version', async (req, res) => {
     // Find available port (reuse existing if possible)
     const gamePort = containerInfo.HostConfig.PortBindings['19132/udp']?.[0]?.HostPort || await findAvailablePort(19132);
 
+    const hostDataPath = await getHostDataPath();
+    const hostServerPath = path.join(hostDataPath, serverId);
+
     // Create new container with updated version
     const newContainer = await docker.createContainer({
       Image: BEDROCK_IMAGE,
@@ -576,7 +631,7 @@ app.post('/api/servers/:id/version', async (req, res) => {
         'SERVER_NAME=' + metadata.name
       ],
       HostConfig: {
-        Binds: [`${serverPath}:/data`],
+        Binds: [`${hostServerPath}:/data`],
         PortBindings: {
           '19132/udp': [{ HostPort: gamePort.toString() }]
         },
@@ -653,6 +708,9 @@ app.put('/api/servers/:id/memory', async (req, res) => {
     // Find available port (reuse existing if possible)
     const gamePort = containerInfo.HostConfig.PortBindings['19132/udp']?.[0]?.HostPort || await findAvailablePort(19132);
 
+    const hostDataPath = await getHostDataPath();
+    const hostServerPath = path.join(hostDataPath, serverId);
+
     // Create new container with updated memory
     const newContainer = await docker.createContainer({
       Image: BEDROCK_IMAGE,
@@ -667,7 +725,7 @@ app.put('/api/servers/:id/memory', async (req, res) => {
         'SERVER_NAME=' + metadata.name
       ],
       HostConfig: {
-        Binds: [`${serverPath}:/data`],
+        Binds: [`${hostServerPath}:/data`],
         PortBindings: {
           '19132/udp': [{ HostPort: gamePort.toString() }]
         },
@@ -1903,13 +1961,33 @@ app.post('/api/servers/:id/addons/upload', addonUpload.single('addon'), async (r
         .promise();
 
       const extractedItems = await fs.readdir(tempExtractPath);
-      for (const item of extractedItems) {
-        const itemPath = path.join(tempExtractPath, item);
-        const stats = await fs.stat(itemPath);
-        if (stats.isDirectory()) {
-          const folderName = await generateUniquePackFolderName(targetDir, originalName, 'rp');
-          const destPath = path.join(targetDir, folderName);
-          await fs.copy(itemPath, destPath, { overwrite: true });
+      const manifestPath = path.join(tempExtractPath, 'manifest.json');
+
+      if (await fs.pathExists(manifestPath)) {
+        // Direct content: create folder and move content into it
+        const folderName = await generateUniquePackFolderName(targetDir, originalName, 'rp');
+        const newFolderPath = path.join(tempExtractPath, folderName);
+        await fs.ensureDir(newFolderPath);
+
+        // Move all items to new folder
+        for (const item of extractedItems) {
+          const src = path.join(tempExtractPath, item);
+          const dest = path.join(newFolderPath, item);
+          await fs.move(src, dest);
+        }
+
+        // Copy the new folder to targetDir
+        await fs.copy(newFolderPath, path.join(targetDir, folderName), { overwrite: true });
+      } else {
+        // Assume folders: rename each folder
+        for (const item of extractedItems) {
+          const itemPath = path.join(tempExtractPath, item);
+          const stats = await fs.stat(itemPath);
+          if (stats.isDirectory()) {
+            const folderName = await generateUniquePackFolderName(targetDir, originalName, 'rp');
+            const destPath = path.join(targetDir, folderName);
+            await fs.copy(itemPath, destPath, { overwrite: true });
+          }
         }
       }
 
