@@ -2786,7 +2786,44 @@
 
                                                 return `
                                                 <div class="p-3 bg-gray-900 rounded-lg">
-                                                    <div class="flex items-start justify-between gap-3">
+                                                    <!-- Mobile Layout -->
+                                                    <div class="md:hidden">
+                                                        <div class="flex-1 min-w-0">
+                                                            <div class="flex flex-col gap-2 mb-1">
+                                                                <span class="font-medium text-sm">${addon.name}</span>
+                                                                <div class="flex flex-wrap gap-1">
+                                                                    ${typeTags.join('')}
+                                                                    ${isEnabled ? '<span class="px-2 py-0.5 text-xs bg-green-600 rounded">✓ Enabled</span>' : '<span class="px-2 py-0.5 text-xs bg-gray-600 rounded">Disabled</span>'}
+                                                                </div>
+                                                            </div>
+                                                            <div class="text-xs text-gray-500">
+                                                                ${addon.behaviorPack?.version ? `BP v${addon.behaviorPack.version.join('.')} • ` : ''}
+                                                                ${addon.resourcePack?.version ? `RP v${addon.resourcePack.version.join('.')} • ` : ''}
+                                                                ${formatBytes(Math.max(addon.behaviorPack?.size || 0, addon.resourcePack?.size || 0))} •
+                                                                ${(() => {
+                                                                    const bpDate = addon.behaviorPack?.modified ? new Date(addon.behaviorPack.modified) : null;
+                                                                    const rpDate = addon.resourcePack?.modified ? new Date(addon.resourcePack.modified) : null;
+                                                                    const latestDate = bpDate && rpDate ? new Date(Math.max(bpDate.getTime(), rpDate.getTime())) :
+                                                                                   bpDate || rpDate || new Date();
+                                                                    return latestDate.toLocaleDateString();
+                                                                })()}
+                                                            </div>
+                                                        </div>
+                                                        <div class="flex gap-1.5 flex-shrink-0 mt-3">
+                                                            <button
+                                                                onclick="toggleAddon('${addon.name}')"
+                                                                class="px-3 py-1.5 text-xs ${isEnabled ? 'bg-yellow-600 hover:bg-yellow-700' : 'bg-green-600 hover:bg-green-700'} rounded-lg whitespace-nowrap">
+                                                                ${isEnabled ? '⏸️ Disable' : '▶️ Enable'}
+                                                            </button>
+                                                            <button
+                                                                onclick="deleteAddon('${addon.name}')"
+                                                                class="px-2 py-1.5 text-xs bg-red-600 hover:bg-red-700 rounded-lg">
+                                                                🗑️
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                    <!-- Desktop Layout -->
+                                                    <div class="hidden md:flex items-start justify-between gap-3">
                                                         <div class="flex-1 min-w-0">
                                                             <div class="flex items-center gap-2 mb-1">
                                                                 <span class="font-medium text-sm truncate">${addon.name}</span>
@@ -2835,10 +2872,42 @@
                                     <div class="space-y-2">
                                         ${state.worlds.map(world => `
                                             <div class="p-3 bg-gray-900 rounded-lg">
-                                                <div class="flex items-center justify-between">
+                                                <!-- Mobile Layout -->
+                                                <div class="md:hidden">
                                                     <div class="flex-1 min-w-0">
                                                         <div class="flex items-center gap-2 mb-1">
                                                             <span class="font-medium text-sm">${world.name}</span>
+                                                            ${world.name === state.config['level-name'] ? '<span class="px-2 py-0.5 text-xs bg-blue-600 rounded">Active</span>' : ''}
+                                                            ${world.isValid ? '<span class="text-xs text-green-500">✓ Valid</span>' : '<span class="text-xs text-red-500">⚠ Invalid</span>'}
+                                                        </div>
+                                                        <div class="text-xs text-gray-500">
+                                                            ${world.size} • ${new Date(world.modified).toLocaleDateString()}
+                                                        </div>
+                                                    </div>
+                                                    <div class="flex gap-1.5 flex-shrink-0 mt-3">
+                                                        ${world.name !== state.config['level-name'] ? `
+                                                            <button
+                                                                onclick="enableWorld('${world.name}')"
+                                                                class="px-3 py-1.5 text-xs bg-green-600 hover:bg-green-700 rounded-lg whitespace-nowrap">
+                                                                ▶️ Enable
+                                                            </button>
+                                                            <button
+                                                                onclick="deleteWorld('${world.name}')"
+                                                                class="px-2 py-1.5 text-xs bg-red-600 hover:bg-red-700 rounded-lg">
+                                                                🗑️
+                                                            </button>
+                                                        ` : `
+                                                            <span class="px-3 py-1.5 text-xs bg-gray-600 rounded-lg whitespace-nowrap text-gray-400">
+                                                                Active World
+                                                            </span>
+                                                        `}
+                                                    </div>
+                                                </div>
+                                                <!-- Desktop Layout -->
+                                                <div class="hidden md:flex items-center justify-between">
+                                                    <div class="flex-1 min-w-0">
+                                                        <div class="flex items-center gap-2 mb-1">
+                                                            <span class="font-medium text-sm truncate">${world.name}</span>
                                                             ${world.name === state.config['level-name'] ? '<span class="px-2 py-0.5 text-xs bg-blue-600 rounded">Active</span>' : ''}
                                                             ${world.isValid ? '<span class="text-xs text-green-500">✓ Valid</span>' : '<span class="text-xs text-red-500">⚠ Invalid</span>'}
                                                         </div>
